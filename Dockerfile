@@ -31,16 +31,15 @@ RUN yt-dlp --version && ffmpeg -version
 
 # Setup app directory & non-root user for security
 RUN groupadd -r clipvault && useradd -r -g clipvault -m -d /home/clipvault clipvault
-RUN mkdir -p /tmp/clipvault-downloads && chown -R clipvault:clipvault /tmp/clipvault-downloads
+RUN chmod 1777 /tmp
 
-# Copy dependency manifests and production dependencies
+# Copy dependency manifests and install production dependencies
 COPY package*.json ./
 RUN npm ci --omit=dev
 
-# Copy built frontend assets and server entry point
+# Copy built frontend assets and server entry point from builder
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/server.ts ./server.ts
-COPY --from=builder /app/node_modules ./node_modules
 
 # Ensure proper permissions
 RUN chown -R clipvault:clipvault /app
@@ -50,6 +49,6 @@ USER clipvault
 EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD curl -f http://localhost:3000/api/system || exit 1
+  CMD curl -f http://localhost:${PORT:-3000}/api/health || exit 1
 
 CMD ["npx", "tsx", "server.ts"]

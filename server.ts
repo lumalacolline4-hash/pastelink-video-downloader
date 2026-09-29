@@ -344,7 +344,7 @@ function serveMediaFile(
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = parseInt(process.env.PORT || "3000", 10);
 
   // Initialize YouTube PO Token provider background server (non-blocking)
   startPotServer(4416).catch((err: any) => {
@@ -353,9 +353,14 @@ async function startServer() {
 
   app.use(express.json());
 
-  // Health check endpoint
-  app.get("/api/health", (_req, res) => {
-    res.json({ status: "ok" });
+  // Health check endpoints for Docker / Railway / Cloud Run
+  app.get(["/api/health", "/api/system"], (_req, res) => {
+    res.json({
+      status: "ok",
+      uptime: Math.round(process.uptime()),
+      timestamp: Date.now(),
+      platform: "clipvault"
+    });
   });
 
   // Helper: Sanitize string environment variables (filtering out "none", "null", "undefined", etc.)
