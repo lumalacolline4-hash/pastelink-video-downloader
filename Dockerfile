@@ -3,7 +3,7 @@
 FROM node:22-bullseye-slim AS builder
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci
+RUN npm install
 COPY . .
 RUN npm run build
 
@@ -35,11 +35,14 @@ RUN chmod 1777 /tmp
 
 # Copy dependency manifests and install production dependencies
 COPY package*.json ./
-RUN npm ci --omit=dev
+RUN npm install --omit=dev
 
-# Copy built frontend assets and server entry point from builder
+# Copy built frontend assets, backend server code, and static directories from builder
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/server.ts ./server.ts
+COPY --from=builder /app/server ./server
+COPY --from=builder /app/pastelink ./pastelink
+COPY --from=builder /app/public ./public
 
 # Ensure proper permissions
 RUN chown -R clipvault:clipvault /app
