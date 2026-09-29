@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  clipvault-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: clipvault_web
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - REDIS_URL=redis://redis:6379
+    volumes:
+      - temp-media:/tmp/clipvault-downloads
+    depends_on:
+      - redis
+    networks:
+      - clipvault-net
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2048M
+
+  redis:
+    image: redis:7-alpine
+    container_name: clipvault_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - clipvault-net
+
+volumes:
+  temp-media:
+    driver: local
+  redis-data:
+    driver: local
+
+networks:
+  clipvault-net:
+    driver: bridge

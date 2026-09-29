@@ -1,0 +1,6 @@
+{
+  "name": "Pastelink - Video Downloader",
+  "description": "Download videos directly to device storage from YouTube, TikTok, Instagram, Twitter/X, Reddit, Facebook, Vimeo, and direct media links.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
