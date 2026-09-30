@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.4
 # Stage 1: Build Frontend Assets
-FROM node:22-bullseye-slim AS builder
+FROM node:22-bookworm-slim AS builder
 WORKDIR /app
 COPY package*.json ./
 RUN npm install
@@ -8,7 +8,7 @@ COPY . .
 RUN npm run build
 
 # Stage 2: Production Runtime
-FROM node:22-bullseye-slim AS runner
+FROM node:22-bookworm-slim AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
@@ -42,7 +42,6 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/server.ts ./server.ts
 COPY --from=builder /app/server ./server
 COPY --from=builder /app/pastelink ./pastelink
-COPY --from=builder /app/public ./public
 
 # Ensure proper permissions
 RUN chown -R clipvault:clipvault /app

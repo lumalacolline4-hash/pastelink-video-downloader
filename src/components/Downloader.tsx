@@ -9,10 +9,10 @@ interface DownloaderProps {
 }
 
 const SAMPLE_LINKS = [
+  { label: 'Sample MP4 Video', url: 'https://filesamples.com/samples/video/mp4/sample_640x360.mp4' },
   { label: 'YouTube Video', url: 'https://www.youtube.com/watch?v=aqz-KE-bpKQ' },
-  { label: 'TikTok Reel', url: 'https://www.tiktok.com/@creativestudio/video/733918239102839' },
-  { label: 'Instagram Reel', url: 'https://www.instagram.com/reel/C8q_4Uau8-R/' },
-  { label: 'FB Watch', url: 'https://www.facebook.com/watch/?v=10153231379946729' },
+  { label: 'TikTok Video', url: 'https://www.tiktok.com/@tiktok/video/7106594312292453678' },
+  { label: 'Direct Media', url: 'https://filesamples.com/samples/video/mp4/sample_960x400_ocean_with_audio.mp4' },
 ];
 
 export const Downloader: React.FC<DownloaderProps> = ({
