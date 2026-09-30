@@ -12,27 +12,18 @@ import { VideoMetadata, DownloadApiResponse } from './types';
 import { cleanYouTubeUrl, detectPlatform } from './utils/detector';
 
 export default function App() {
-  const [darkMode, setDarkMode] = useState<boolean>(() => {
-    const saved = localStorage.getItem('pastelink_theme');
-    return saved === 'dark';
-  });
-
   const [metadata, setMetadata] = useState<VideoMetadata | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [serverError, setServerError] = useState<string | null>(null);
   const [isNoAdsOpen, setIsNoAdsOpen] = useState<boolean>(false);
 
-  // Sync dark class on html root
+  // Ensure dark mode class and storage are permanently cleared
   useEffect(() => {
-    const root = document.documentElement;
-    if (darkMode) {
-      root.classList.add('dark');
-      localStorage.setItem('pastelink_theme', 'dark');
-    } else {
-      root.classList.remove('dark');
-      localStorage.setItem('pastelink_theme', 'light');
-    }
-  }, [darkMode]);
+    document.documentElement.classList.remove('dark');
+    try {
+      localStorage.removeItem('pastelink_theme');
+    } catch {}
+  }, []);
 
   // Process URL using the backend contract: POST /api/download with JSON body
   const handleFetchVideo = async (url: string) => {
@@ -122,13 +113,9 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-white dark:bg-[#090a0f] text-zinc-900 dark:text-white transition-colors duration-200">
+    <div className="min-h-screen flex flex-col bg-white text-zinc-900 transition-colors">
       {/* Sticky Header */}
-      <Header
-        darkMode={darkMode}
-        setDarkMode={setDarkMode}
-        onOpenNoAds={() => setIsNoAdsOpen(true)}
-      />
+      <Header onOpenNoAds={() => setIsNoAdsOpen(true)} />
 
       {/* Main Content */}
       <main className="flex-1">
