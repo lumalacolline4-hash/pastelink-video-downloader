@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { Play, Download, Check, Sparkles, X, AlertCircle, Loader2, ExternalLink } from 'lucide-react';
 import { VideoMetadata, FormatOption } from '../types';
+import { DownloadProgressHUD } from './DownloadProgressHUD';
 
 interface VideoResultProps {
   metadata: VideoMetadata;
@@ -14,6 +15,16 @@ export const VideoResult: React.FC<VideoResultProps> = ({ metadata }) => {
   const [previewOpen, setPreviewOpen] = useState<boolean>(false);
 
   const [showCookieGuide, setShowCookieGuide] = useState<boolean>(false);
+
+  // Progressive Download HUD Telemetry
+  const [progressPct, setProgressPct] = useState<number>(0);
+  const [progressStage, setProgressStage] = useState<'handshake' | 'transcoding' | 'streaming' | 'saving' | 'complete'>('handshake');
+  const [progressStageText, setProgressStageText] = useState<string>('Connecting & handshake...');
+  const [progressSpeed, setProgressSpeed] = useState<string>('0 MB/s');
+  const [progressTransferred, setProgressTransferred] = useState<string>('0 MB');
+  const [progressTotal, setProgressTotal] = useState<string>('');
+
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const formats: FormatOption[] = metadata.formats && metadata.formats.length > 0
     ? metadata.formats
@@ -39,6 +50,15 @@ export const VideoResult: React.FC<VideoResultProps> = ({ metadata }) => {
       ];
 
   const currentFormat = formats[selectedFormatIndex] || formats[0];
+  const isAudio = currentFormat.ext?.toLowerCase() === 'mp3' || currentFormat.quality?.toLowerCase().includes('audio');
+
+  const handleCancelDownload = () => {
+    if (abortControllerRef.current) {
+      try { abortControllerRef.current.abort(); } catch {}
+    }
+    setDownloading(false);
+    setProgressPct(0);
+  };
 
   const handleDownload = async () => {
     if (!currentFormat) return;
@@ -46,15 +66,44 @@ export const VideoResult: React.FC<VideoResultProps> = ({ metadata }) => {
     setDownloadSuccess(false);
     setDownloadError(null);
 
+    // Initial Telemetry Setup
+    setProgressPct(6);
+    setProgressStage('handshake');
+    setProgressStageText('Resolving media stream gateway & handshake...');
+    setProgressSpeed('Connecting...');
+    setProgressTransferred('0 MB');
+    setProgressTotal('');
+
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+
     const safeTitle = (metadata.title || 'video')
       .replace(/[^a-zA-Z0-9_\- ]/g, '_')
       .trim()
       .slice(0, 50);
     const targetFilename = `${safeTitle || 'video'}.${currentFormat.ext || 'mp4'}`;
 
+    // Smooth ticker during server transcode phase
+    let currentSimPct = 6;
+    const ticker = setInterval(() => {
+      if (currentSimPct < 22) {
+        currentSimPct += 3;
+        setProgressPct(currentSimPct);
+        setProgressStage('handshake');
+        setProgressStageText('Negotiating stream packets & bitrate...');
+      } else if (currentSimPct < 45) {
+        currentSimPct += 1.8;
+        setProgressPct(Math.round(currentSimPct));
+        setProgressStage('transcoding');
+        setProgressStageText('Transcoding H.264 video & AAC audio (Universal)...');
+        setProgressSpeed('Transcoding...');
+      }
+    }, 280);
+
     try {
-      // Fetch stream to verify it's a real media file and NOT an HTML/JSON error page
-      const response = await fetch(currentFormat.url);
+      const response = await fetch(currentFormat.url, { signal: abortController.signal });
+      clearInterval(ticker);
+
       const contentType = (response.headers.get('content-type') || '').toLowerCase();
 
       if (!response.ok || contentType.includes('application/json')) {
@@ -65,8 +114,61 @@ export const VideoResult: React.FC<VideoResultProps> = ({ metadata }) => {
         );
       }
 
-      // Convert verified media bytes to blob and trigger real browser file download
-      const blob = await response.blob();
+      // Stream transfer phase
+      setProgressStage('streaming');
+      setProgressStageText('Streaming high-bitrate media packets...');
+      const contentLengthHeader = response.headers.get('content-length');
+      const totalBytes = contentLengthHeader ? parseInt(contentLengthHeader, 10) : 0;
+      if (totalBytes > 0) {
+        setProgressTotal(`${(totalBytes / (1024 * 1024)).toFixed(1)} MB`);
+      }
+
+      const reader = response.body?.getReader();
+      const chunks: Uint8Array[] = [];
+      let receivedBytes = 0;
+      let lastTime = Date.now();
+      let lastBytes = 0;
+
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value) {
+            chunks.push(value);
+            receivedBytes += value.length;
+
+            const now = Date.now();
+            const dt = (now - lastTime) / 1000;
+            if (dt >= 0.25) {
+              const bytesDiff = receivedBytes - lastBytes;
+              const speedMb = (bytesDiff / (1024 * 1024)) / dt;
+              setProgressSpeed(`${speedMb.toFixed(1)} MB/s`);
+              lastTime = now;
+              lastBytes = receivedBytes;
+            }
+
+            setProgressTransferred(`${(receivedBytes / (1024 * 1024)).toFixed(1)} MB`);
+
+            if (totalBytes > 0) {
+              const calculatedPct = Math.min(98, Math.round(45 + (receivedBytes / totalBytes) * 53));
+              setProgressPct(calculatedPct);
+            } else {
+              setProgressPct((prev) => Math.min(98, prev + 1));
+            }
+          }
+        }
+      } else {
+        // Fallback for browsers without stream reader
+        const blobFallback = await response.blob();
+        chunks.push(new Uint8Array(await blobFallback.arrayBuffer()));
+      }
+
+      // Final Assembly & Saving
+      setProgressStage('saving');
+      setProgressStageText('Verifying container & saving to device storage...');
+      setProgressPct(100);
+
+      const blob = new Blob(chunks as any[], { type: isAudio ? 'audio/mpeg' : 'video/mp4' });
       if (blob.size < 1000) {
         throw new Error('Downloaded stream was incomplete or empty. Please try another quality format.');
       }
@@ -79,15 +181,25 @@ export const VideoResult: React.FC<VideoResultProps> = ({ metadata }) => {
       a.click();
       document.body.removeChild(a);
 
-      // Clean up object URL after a short delay
       setTimeout(() => {
         window.URL.revokeObjectURL(blobUrl);
       }, 60000);
 
-      setDownloading(false);
+      setProgressStage('complete');
+      setProgressStageText('✨ Complete! Saved to your Downloads folder.');
       setDownloadSuccess(true);
-      setTimeout(() => setDownloadSuccess(false), 5000);
+
+      setTimeout(() => {
+        setDownloading(false);
+        setTimeout(() => setDownloadSuccess(false), 5000);
+      }, 2500);
     } catch (err: any) {
+      clearInterval(ticker);
+      if (err?.name === 'AbortError') {
+        console.log('[Pastelink] Download cancelled by user');
+        setDownloading(false);
+        return;
+      }
       console.warn('[Pastelink Download Error]', err);
       setDownloading(false);
       setDownloadError(
@@ -192,31 +304,40 @@ export const VideoResult: React.FC<VideoResultProps> = ({ metadata }) => {
             </div>
           </div>
 
-          <div>
-            {/* Download Now Button */}
-            <button
-              type="button"
-              onClick={handleDownload}
-              disabled={downloading}
-              className="w-full h-14 rounded-2xl bg-[#00e575] hover:bg-[#00cf68] text-zinc-950 font-black text-base flex items-center justify-center gap-2 shadow-[0_6px_20px_rgba(0,229,117,0.35)] hover:shadow-[0_8px_25px_rgba(0,229,117,0.5)] transition-all disabled:opacity-60 cursor-pointer"
-            >
-              {downloading ? (
-                <>
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                  <span>Preparing Universal MP4...</span>
-                </>
-              ) : downloadSuccess ? (
-                <>
-                  <Check className="w-5 h-5 stroke-[3]" />
-                  <span>Download Complete!</span>
-                </>
-              ) : (
-                <>
-                  <Download className="w-5 h-5 stroke-[2.5]" />
-                  <span>Download {currentFormat.quality}</span>
-                </>
-              )}
-            </button>
+          <div className="space-y-3">
+            {/* If downloading, render the futuristic Cyber Download Progress HUD */}
+            {downloading ? (
+              <DownloadProgressHUD
+                percentage={progressPct}
+                stage={progressStage}
+                stageText={progressStageText}
+                speed={progressSpeed}
+                transferredFormatted={progressTransferred}
+                totalFormatted={progressTotal}
+                isAudio={isAudio}
+                quality={currentFormat.quality}
+                onCancel={handleCancelDownload}
+              />
+            ) : (
+              /* Download Now Button */
+              <button
+                type="button"
+                onClick={handleDownload}
+                className="w-full h-14 rounded-2xl bg-[#00e575] hover:bg-[#00cf68] text-zinc-950 font-black text-base flex items-center justify-center gap-2 shadow-[0_6px_20px_rgba(0,229,117,0.35)] hover:shadow-[0_8px_25px_rgba(0,229,117,0.5)] transition-all cursor-pointer"
+              >
+                {downloadSuccess ? (
+                  <>
+                    <Check className="w-5 h-5 stroke-[3]" />
+                    <span>Download Complete!</span>
+                  </>
+                ) : (
+                  <>
+                    <Download className="w-5 h-5 stroke-[2.5]" />
+                    <span>Download {currentFormat.quality}</span>
+                  </>
+                )}
+              </button>
+            )}
 
             {/* Error Message if download failed */}
             {downloadError && (
