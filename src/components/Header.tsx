@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Download, Shield, Menu, X } from 'lucide-react';
+import { Download, Shield, Menu, X, ExternalLink, Sun } from 'lucide-react';
 
 interface HeaderProps {
   onOpenNoAds: () => void;
@@ -7,6 +7,14 @@ interface HeaderProps {
 
 export const Header: React.FC<HeaderProps> = ({ onOpenNoAds }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  const handleOpenFullTab = () => {
+    try {
+      window.open(window.location.href, '_blank', 'noopener,noreferrer');
+    } catch {
+      // fallback
+    }
+  };
 
   return (
     <header className="sticky top-0 z-50 w-full bg-white/95 backdrop-blur-md border-b border-zinc-200 shadow-sm transition-colors">
@@ -43,13 +51,31 @@ export const Header: React.FC<HeaderProps> = ({ onOpenNoAds }) => {
         </nav>
 
         {/* Actions */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5">
+          {/* Full Tab Button */}
+          <button
+            onClick={handleOpenFullTab}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-[#1a73e8] hover:bg-[#1557b0] text-white text-xs font-bold transition-all shadow-sm cursor-pointer"
+            title="Open in Full Tab"
+          >
+            <span>Full Tab</span>
+            <ExternalLink className="w-3.5 h-3.5" />
+          </button>
+
+          {/* Light Mode Sun Badge */}
+          <div
+            className="w-8 h-8 rounded-full border border-amber-200 bg-amber-50/70 flex items-center justify-center text-amber-500"
+            title="Light Mode Active"
+          >
+            <Sun className="w-4 h-4 text-amber-500" />
+          </div>
+
           {/* No Ads Button */}
           <button
             onClick={onOpenNoAds}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-xl border-2 border-[#00e575] text-[#00b359] bg-[#00e575]/10 hover:bg-[#00e575] hover:text-zinc-950 text-xs font-bold transition-all shadow-sm shadow-[#00e575]/20 cursor-pointer"
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-[#00e575] text-[#00b359] bg-white hover:bg-[#00e575]/10 text-xs font-bold transition-all shadow-sm cursor-pointer"
           >
-            <Shield className="w-3.5 h-3.5" />
+            <Shield className="w-3.5 h-3.5 text-[#00e575]" />
             <span>No Ads</span>
           </button>
 
