@@ -13,6 +13,8 @@ export const VideoResult: React.FC<VideoResultProps> = ({ metadata }) => {
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [previewOpen, setPreviewOpen] = useState<boolean>(false);
 
+  const [showCookieGuide, setShowCookieGuide] = useState<boolean>(false);
+
   const formats: FormatOption[] = metadata.formats && metadata.formats.length > 0
     ? metadata.formats
     : [
@@ -218,19 +220,28 @@ export const VideoResult: React.FC<VideoResultProps> = ({ metadata }) => {
 
             {/* Error Message if download failed */}
             {downloadError && (
-              <div className="mt-3 p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-500 text-xs font-semibold flex items-start gap-2">
-                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                <div className="flex-1">
-                  <p>{downloadError}</p>
-                  <a
-                    href={currentFormat.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-1 text-[#00e575] hover:underline mt-1 font-bold"
-                  >
-                    <span>Try direct stream link</span>
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
+              <div className="mt-3 p-3.5 rounded-2xl bg-red-500/10 border border-red-500/30 text-red-500 text-xs font-semibold flex items-start gap-2.5">
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-400" />
+                <div className="flex-1 space-y-1.5">
+                  <p className="leading-relaxed">{downloadError}</p>
+                  <div className="flex flex-wrap items-center gap-3 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setShowCookieGuide(true)}
+                      className="text-xs bg-red-500/20 hover:bg-red-500/30 text-white px-2.5 py-1 rounded-lg font-bold transition-colors cursor-pointer"
+                    >
+                      💡 How to fix on Render (2 min)
+                    </button>
+                    <a
+                      href={currentFormat.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 text-[#00e575] hover:underline font-bold"
+                    >
+                      <span>Direct stream attempt</span>
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  </div>
                 </div>
               </div>
             )}
@@ -278,6 +289,63 @@ export const VideoResult: React.FC<VideoResultProps> = ({ metadata }) => {
                 <span>Direct File Link</span>
                 <ExternalLink className="w-3 h-3" />
               </a>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Render Cookie / Proxy Fix Modal */}
+      {showCookieGuide && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="relative w-full max-w-xl bg-zinc-900 border border-zinc-700 rounded-3xl p-6 sm:p-8 shadow-2xl text-left text-zinc-200">
+            <button
+              onClick={() => setShowCookieGuide(false)}
+              className="absolute top-5 right-5 p-1.5 text-zinc-400 hover:text-white rounded-full bg-zinc-800/80 cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <h3 className="text-lg font-bold text-white mb-2 flex items-center gap-2">
+              <span className="text-[#00e575]">🚀</span> Fixing YouTube Downloads on Render
+            </h3>
+            <p className="text-xs text-zinc-400 mb-4 leading-relaxed">
+              YouTube blocks cloud hosting providers (Render, Railway, AWS) with bot verification when downloading videos. Because your backend is on Render's cloud servers, YouTube requires a session cookie or residential proxy.
+            </p>
+
+            <div className="space-y-3.5 text-xs">
+              <div className="bg-zinc-800/70 border border-zinc-700/60 p-3.5 rounded-2xl">
+                <p className="font-bold text-white mb-1">Option 1: Add YouTube Cookies to Render (Free &amp; 2 Mins)</p>
+                <ol className="list-decimal list-inside space-y-1 text-zinc-300">
+                  <li>Install the free Chrome extension <strong className="text-white">"Get cookies.txt LOCALLY"</strong>.</li>
+                  <li>Go to <strong className="text-white">youtube.com</strong> and click the extension icon to export cookies as text.</li>
+                  <li>Go to your <strong className="text-white">Render Dashboard &rarr; Your Web Service &rarr; Environment</strong>.</li>
+                  <li>Click <strong className="text-white">Add Environment Variable</strong>:</li>
+                </ol>
+                <div className="mt-2 p-2 bg-black/60 rounded font-mono text-[11px] text-[#00e575]">
+                  KEY: YTDLP_COOKIES_CONTENT<br/>
+                  VALUE: [Paste the exported cookies text here]
+                </div>
+                <p className="mt-1 text-[11px] text-zinc-400">Save changes. Render will restart automatically and all YouTube videos will download!</p>
+              </div>
+
+              <div className="bg-zinc-800/70 border border-zinc-700/60 p-3.5 rounded-2xl">
+                <p className="font-bold text-white mb-1">Option 2: Use a Residential Proxy</p>
+                <p className="text-zinc-300 mb-1.5">If you have a proxy (e.g., Webshare, BrightData, or IPRoyal), add this in Render:</p>
+                <div className="p-2 bg-black/60 rounded font-mono text-[11px] text-[#00e575]">
+                  KEY: PROXY_URL<br/>
+                  VALUE: http://user:pass@proxy-ip:port
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-6 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowCookieGuide(false)}
+                className="px-5 py-2.5 rounded-xl bg-[#00e575] text-zinc-950 font-bold text-xs hover:bg-[#00e575]/90 cursor-pointer"
+              >
+                Got it, close
+              </button>
             </div>
           </div>
         </div>

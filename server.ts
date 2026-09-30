@@ -932,12 +932,15 @@ async function startServer() {
       stderr.includes("Sign in to confirm you’re not a bot") ||
       stderr.includes("confirm you're not a bot") ||
       stderr.includes("bot verification") ||
-      stderr.includes("login page");
+      stderr.includes("Failed to extract any player response") ||
+      stderr.includes("login page") ||
+      stderr.includes("HTTP Error 429") ||
+      stderr.includes("429 Too Many Requests");
 
     let friendlyError = "Failed to extract media stream from the provided link.";
     if (isBotVerification) {
       friendlyError =
-        "YouTube triggered bot verification for this specific video on cloud datacenter server IPs. Please try another video URL or use the direct browser download option.";
+        "YouTube is blocking requests from this cloud server (bot verification). To enable YouTube downloads on Render, add your YouTube cookies to the YTDLP_COOKIES_CONTENT environment variable, or try another video link.";
     } else if (
       stderr.includes("Video unavailable") ||
       stderr.includes("This video is unavailable")
