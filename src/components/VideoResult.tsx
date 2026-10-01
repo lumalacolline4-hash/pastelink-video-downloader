@@ -427,18 +427,27 @@ export const VideoResult: React.FC<VideoResultProps> = ({ metadata }) => {
             </button>
 
             <h3 className="text-lg font-bold text-white mb-2 flex items-center gap-2">
-              <span className="text-[#00e575]">🚀</span> Fixing YouTube Downloads on Render
+              <span className="text-[#00e575]">🚀</span>{' '}
+              {metadata.platform === 'instagram'
+                ? 'Fixing Instagram Downloads on Render'
+                : 'Fixing Video Downloads on Render'}
             </h3>
             <p className="text-xs text-zinc-400 mb-4 leading-relaxed">
-              YouTube blocks cloud hosting providers (Render, Railway, AWS) with bot verification when downloading videos. Because your backend is on Render's cloud servers, YouTube requires a session cookie or residential proxy.
+              {metadata.platform === 'instagram'
+                ? "Instagram blocks anonymous requests from cloud hosting providers (Render, Railway, AWS) and redirects to its login page. To enable Instagram Reel downloads on Render, add your Instagram cookies to your environment variables."
+                : "YouTube & social platforms block cloud hosting providers (Render, Railway, AWS) with bot verification when downloading videos. Because your backend is on Render's cloud servers, a session cookie or proxy enables uninterrupted downloads."}
             </p>
 
             <div className="space-y-3.5 text-xs">
               <div className="bg-zinc-800/70 border border-zinc-700/60 p-3.5 rounded-2xl">
-                <p className="font-bold text-white mb-1">Option 1: Add YouTube Cookies to Render (Free &amp; 2 Mins)</p>
+                <p className="font-bold text-white mb-1">
+                  Option 1: Add Cookies to Render (Free &amp; 2 Mins)
+                </p>
                 <ol className="list-decimal list-inside space-y-1 text-zinc-300">
-                  <li>Install the free Chrome extension <strong className="text-white">"Get cookies.txt LOCALLY"</strong>.</li>
-                  <li>Go to <strong className="text-white">youtube.com</strong> and click the extension icon to export cookies as text.</li>
+                  <li>Install the free browser extension <strong className="text-white">"Get cookies.txt LOCALLY"</strong>.</li>
+                  <li>
+                    Go to <strong className="text-white">{metadata.platform === 'instagram' ? 'instagram.com' : 'youtube.com'}</strong> and click the extension icon to export cookies as text.
+                  </li>
                   <li>Go to your <strong className="text-white">Render Dashboard &rarr; Your Web Service &rarr; Environment</strong>.</li>
                   <li>Click <strong className="text-white">Add Environment Variable</strong>:</li>
                 </ol>
@@ -446,7 +455,9 @@ export const VideoResult: React.FC<VideoResultProps> = ({ metadata }) => {
                   KEY: YTDLP_COOKIES_CONTENT<br/>
                   VALUE: [Paste the exported cookies text here]
                 </div>
-                <p className="mt-1 text-[11px] text-zinc-400">Save changes. Render will restart automatically and all YouTube videos will download!</p>
+                <p className="mt-1 text-[11px] text-zinc-400">
+                  Save changes. Render will restart automatically and {metadata.platform === 'instagram' ? 'Instagram Reels' : 'videos'} will download!
+                </p>
               </div>
 
               <div className="bg-zinc-800/70 border border-zinc-700/60 p-3.5 rounded-2xl">

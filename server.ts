@@ -390,8 +390,16 @@ async function startServer() {
       trimmed.includes("# Netscape HTTP Cookie File") ||
       trimmed.includes("# HTTP Cookie File") ||
       trimmed.includes(".youtube.com") ||
+      trimmed.includes(".instagram.com") ||
+      trimmed.includes(".facebook.com") ||
+      trimmed.includes(".tiktok.com") ||
       trimmed.includes("LOGIN_INFO") ||
       trimmed.includes("VISITOR_INFO1_LIVE") ||
+      trimmed.includes("sessionid") ||
+      trimmed.includes("ds_user_id") ||
+      trimmed.includes("csrftoken") ||
+      trimmed.includes("mid=") ||
+      trimmed.includes("ig_did") ||
       trimmed.includes("HSID") ||
       trimmed.includes("SSID") ||
       trimmed.includes("SID=")
@@ -428,8 +436,11 @@ async function startServer() {
       } catch {}
     }
 
-    // 2. Inline Netscape cookie content from YTDLP_COOKIES_CONTENT
-    const cookieContent = getValidEnvString(process.env.YTDLP_COOKIES_CONTENT);
+    // 2. Inline Netscape cookie content from YTDLP_COOKIES_CONTENT or INSTAGRAM_COOKIES_CONTENT or COOKIES_CONTENT
+    const cookieContent =
+      getValidEnvString(process.env.YTDLP_COOKIES_CONTENT) ||
+      getValidEnvString(process.env.INSTAGRAM_COOKIES_CONTENT) ||
+      getValidEnvString(process.env.COOKIES_CONTENT);
     const cookieTmpPath = path.join("/tmp", "ytdlp_cookies.txt");
     if (cookieContent) {
       if (isValidNetscapeCookies(cookieContent)) {
@@ -444,14 +455,14 @@ async function startServer() {
         } catch {}
       } else {
         console.log(
-          "[Cookies Config] YTDLP_COOKIES_CONTENT is not in recognized cookie format; ignoring."
+          "[Cookies Config] Provided cookie content is not in recognized cookie format; ignoring."
         );
         try {
           if (fs.existsSync(cookieTmpPath)) fs.unlinkSync(cookieTmpPath);
         } catch {}
       }
     } else {
-      // Clean up stale /tmp/ytdlp_cookies.txt if YTDLP_COOKIES_CONTENT is not set or set to 'none'
+      // Clean up stale /tmp/ytdlp_cookies.txt if no cookies are set
       try {
         if (fs.existsSync(cookieTmpPath)) {
           const existing = fs.readFileSync(cookieTmpPath, "utf-8");
@@ -812,6 +823,15 @@ async function startServer() {
           args.push("--extractor-args", `youtube:player_client=${clientArgs}`);
         }
 
+        if (targetUrl.includes("instagram.com") || targetUrl.includes("instagr.am")) {
+          args.push(
+            "--add-header",
+            "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "--add-header",
+            "Accept-Language:en-US,en;q=0.9"
+          );
+        }
+
         if (isAudio) {
           args.push("-x", "--audio-format", "mp3", "-f", formatArg, "-o", `${outputPathBase}.raw.%(ext)s`, targetUrl);
         } else {
@@ -937,10 +957,27 @@ async function startServer() {
       stderr.includes("HTTP Error 429") ||
       stderr.includes("429 Too Many Requests");
 
+    const isInstagram =
+      targetUrl.includes("instagram.com") ||
+      targetUrl.includes("instagr.am") ||
+      stderr.includes("[Instagram]");
+    const isYouTube =
+      targetUrl.includes("youtube.com") ||
+      targetUrl.includes("youtu.be") ||
+      stderr.includes("[youtube]");
+
     let friendlyError = "Failed to extract media stream from the provided link.";
     if (isBotVerification) {
-      friendlyError =
-        "YouTube is blocking requests from this cloud server (bot verification). To enable YouTube downloads on Render, add your YouTube cookies to the YTDLP_COOKIES_CONTENT environment variable, or try another video link.";
+      if (isInstagram) {
+        friendlyError =
+          "Instagram is redirecting anonymous requests from this cloud server to its login page. To enable Instagram Reel downloads on Render, add your Instagram cookies to the YTDLP_COOKIES_CONTENT environment variable, or try another video link.";
+      } else if (isYouTube) {
+        friendlyError =
+          "YouTube is blocking requests from this cloud server (bot verification). To enable YouTube downloads on Render, add your YouTube cookies to the YTDLP_COOKIES_CONTENT environment variable, or try another video link.";
+      } else {
+        friendlyError =
+          "The platform is rate-limiting or requiring login for cloud server requests. Add your cookies to the YTDLP_COOKIES_CONTENT environment variable, or try another video link.";
+      }
     } else if (
       stderr.includes("Video unavailable") ||
       stderr.includes("This video is unavailable")
@@ -1081,6 +1118,7 @@ async function startServer() {
     let thumbnail = "";
     let duration: string | undefined;
     let tikData: any = null;
+    let igDirectUrl: string | undefined = undefined;
 
     if (platform === "youtube" && videoId) {
       thumbnail = `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
@@ -1134,6 +1172,34 @@ async function startServer() {
       title = `Instagram Reel (${reelId})`;
       author = "@instagram.creator";
       thumbnail = "https://images.unsplash.com/photo-1611262588024-d12430b98920?w=800&auto=format&fit=crop&q=80";
+
+      // 1. Try Cobalt API if configured
+      try {
+        const cobaltDirect = await extractViaCobalt(trimmedUrl, "HD", false);
+        if (cobaltDirect.streamUrl) {
+          igDirectUrl = cobaltDirect.streamUrl;
+        }
+      } catch {}
+
+      // 2. Try Instagram oEmbed for real author and title
+      try {
+        const oembedRes = await fetch(
+          `https://api.instagram.com/oembed/?url=${encodeURIComponent(trimmedUrl)}`,
+          {
+            headers: {
+              "User-Agent":
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            },
+            signal: AbortSignal.timeout(3500),
+          }
+        );
+        if (oembedRes.ok) {
+          const oembedData: any = await oembedRes.json();
+          if (oembedData.title) title = oembedData.title.slice(0, 100);
+          if (oembedData.author_name) author = `@${oembedData.author_name}`;
+          if (oembedData.thumbnail_url) thumbnail = oembedData.thumbnail_url;
+        }
+      } catch {}
     } else if (platform === "facebook") {
       title = "Facebook Video";
       author = "Facebook Creator";
@@ -1179,7 +1245,7 @@ async function startServer() {
       author,
       thumbnail,
       duration,
-      directPlayUrl: tikData?.playUrl,
+      directPlayUrl: tikData?.playUrl || igDirectUrl,
       directMusicUrl: tikData?.musicUrl,
       createdAt: now,
       expiresAt: now + 30 * 60 * 1000, // 30 mins
@@ -1448,6 +1514,41 @@ async function startServer() {
         }
       } catch (tiktokDirectErr: any) {
         console.warn("[Stream Handler - TikTok direct stream fallback failed, using yt-dlp]", tiktokDirectErr?.message);
+      }
+    }
+
+    // For Instagram, if direct URL was resolved or available
+    if (job.platform === "instagram" && directFallbackUrl) {
+      try {
+        console.log("[DEV LOG - Prioritizing Direct Instagram Stream]", directFallbackUrl);
+        const igRes = await fetch(directFallbackUrl, {
+          headers: {
+            "User-Agent":
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            Referer: "https://www.instagram.com/",
+          },
+          signal: AbortSignal.timeout(25000),
+        });
+
+        if (igRes.ok) {
+          const tempRawIg = path.join("/tmp", `ig_raw_${job.jobId}_${Date.now()}`);
+          const tempOutIg = path.join("/tmp", `ig_univ_${job.jobId}_${isAudio ? "mp3" : "mp4"}`);
+          const buf = Buffer.from(await igRes.arrayBuffer());
+          fs.writeFileSync(tempRawIg, buf);
+
+          const conv = await ensureUniversalMedia(tempRawIg, tempOutIg, isAudio, quality);
+          try { fs.unlinkSync(tempRawIg); } catch {}
+
+          const finalFile = conv.success && fs.existsSync(conv.filePath) ? conv.filePath : (fs.existsSync(tempOutIg) ? tempOutIg : null);
+          if (finalFile) {
+            setTimeout(() => {
+              try { if (fs.existsSync(finalFile)) fs.unlinkSync(finalFile); } catch {}
+            }, 15 * 60 * 1000);
+            return serveMediaFile(finalFile, targetFilename, isAudio, isPreview, req, res);
+          }
+        }
+      } catch (igDirectErr: any) {
+        console.warn("[Stream Handler - Instagram direct stream fallback failed, using yt-dlp]", igDirectErr?.message);
       }
     }
 
