@@ -427,45 +427,35 @@ export const VideoResult: React.FC<VideoResultProps> = ({ metadata }) => {
             </button>
 
             <h3 className="text-lg font-bold text-white mb-2 flex items-center gap-2">
-              <span className="text-[#00e575]">🚀</span>{' '}
-              {metadata.platform === 'instagram'
-                ? 'Fixing Instagram Downloads on Render'
-                : 'Fixing Video Downloads on Render'}
+              <span className="text-[#00e575]">🚀</span> Cobalt API Engine Configuration
             </h3>
             <p className="text-xs text-zinc-400 mb-4 leading-relaxed">
-              {metadata.platform === 'instagram'
-                ? "Instagram blocks anonymous requests from cloud hosting providers (Render, Railway, AWS) and redirects to its login page. To enable Instagram Reel downloads on Render, add your Instagram cookies to your environment variables."
-                : "YouTube & social platforms block cloud hosting providers (Render, Railway, AWS) with bot verification when downloading videos. Because your backend is on Render's cloud servers, a session cookie or proxy enables uninterrupted downloads."}
+              Downloads are powered by the Cobalt API engine. You can connect your own Cobalt API instance or API key in your Render environment variables for unlimited cloud downloading.
             </p>
 
             <div className="space-y-3.5 text-xs">
               <div className="bg-zinc-800/70 border border-zinc-700/60 p-3.5 rounded-2xl">
                 <p className="font-bold text-white mb-1">
-                  Option 1: Add Cookies to Render (Free &amp; 2 Mins)
+                  Option 1: Set Cobalt API Instance URL (Recommended)
                 </p>
-                <ol className="list-decimal list-inside space-y-1 text-zinc-300">
-                  <li>Install the free browser extension <strong className="text-white">"Get cookies.txt LOCALLY"</strong>.</li>
-                  <li>
-                    Go to <strong className="text-white">{metadata.platform === 'instagram' ? 'instagram.com' : 'youtube.com'}</strong> and click the extension icon to export cookies as text.
-                  </li>
-                  <li>Go to your <strong className="text-white">Render Dashboard &rarr; Your Web Service &rarr; Environment</strong>.</li>
-                  <li>Click <strong className="text-white">Add Environment Variable</strong>:</li>
-                </ol>
-                <div className="mt-2 p-2 bg-black/60 rounded font-mono text-[11px] text-[#00e575]">
-                  KEY: YTDLP_COOKIES_CONTENT<br/>
-                  VALUE: [Paste the exported cookies text here]
+                <p className="text-zinc-300 mb-2">
+                  Go to your <strong className="text-white">Render Dashboard &rarr; Your Web Service &rarr; Environment</strong> and add:
+                </p>
+                <div className="mt-1 p-2 bg-black/60 rounded font-mono text-[11px] text-[#00e575]">
+                  KEY: COBALT_API_URL<br/>
+                  VALUE: https://your-cobalt-api-instance.com
                 </div>
-                <p className="mt-1 text-[11px] text-zinc-400">
-                  Save changes. Render will restart automatically and {metadata.platform === 'instagram' ? 'Instagram Reels' : 'videos'} will download!
+                <p className="mt-1.5 text-[11px] text-zinc-400">
+                  Deploy or point to any public or self-hosted Cobalt instance.
                 </p>
               </div>
 
               <div className="bg-zinc-800/70 border border-zinc-700/60 p-3.5 rounded-2xl">
-                <p className="font-bold text-white mb-1">Option 2: Use a Residential Proxy</p>
-                <p className="text-zinc-300 mb-1.5">If you have a proxy (e.g., Webshare, BrightData, or IPRoyal), add this in Render:</p>
+                <p className="font-bold text-white mb-1">Option 2: Add Cobalt API Key (Optional)</p>
+                <p className="text-zinc-300 mb-1.5">If your Cobalt instance requires authentication:</p>
                 <div className="p-2 bg-black/60 rounded font-mono text-[11px] text-[#00e575]">
-                  KEY: PROXY_URL<br/>
-                  VALUE: http://user:pass@proxy-ip:port
+                  KEY: COBALT_API_KEY<br/>
+                  VALUE: your-api-key
                 </div>
               </div>
             </div>

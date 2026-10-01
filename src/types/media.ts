@@ -91,7 +91,7 @@ export interface HistoryItem {
 
 export interface SystemStatus {
   status: 'healthy' | 'degraded';
-  ytdlpVersion: string;
+  engineVersion: string;
   ffmpegVersion: string;
   nodeVersion: string;
   activeTasks: number;

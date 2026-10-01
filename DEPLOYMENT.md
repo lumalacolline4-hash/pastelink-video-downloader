@@ -13,7 +13,7 @@ This document outlines high-availability deployment, scaling strategies, and med
 sudo apt update && sudo apt install -y ffmpeg python3 curl
 
 # macOS (Homebrew):
-brew install ffmpeg yt-dlp
+brew install ffmpeg
 
 # 2. Install Project Dependencies
 npm install
@@ -94,25 +94,25 @@ For multi-instance horizontal scaling (Kubernetes / ECS / Cloud Run):
 
 ---
 
-## 4. Platform Anti-Bot & Residential Proxy Strategy
+## 4. Platform Engine & Cobalt API Strategy
 
-Certain media platforms (like YouTube datacenter blocks) rate-limit known cloud datacenter IP ranges (AWS, GCP, Azure, DigitalOcean).
+ClipVault uses the modern, lightweight Cobalt API engine for media stream extraction.
 
-### Production Solutions:
-1. **Residential Proxy Rotation**:
-   Pass a residential proxy pool via the `--proxy` flag:
+### Production Configuration:
+1. **Cobalt Instance URL**:
+   Configure a self-hosted or dedicated Cobalt instance in your environment:
    ```bash
-   yt-dlp --proxy "http://user:pass@residential.proxy-provider.com:8000" ...
+   COBALT_API_URL=https://your-cobalt-instance.com
    ```
-2. **Cookie Injection (`--cookies`)**:
-   Export authenticated session cookies to a secure secret volume and pass:
+2. **API Key (Optional)**:
+   If your Cobalt instance requires an API token:
    ```bash
-   yt-dlp --cookies /etc/secrets/cookies.txt ...
+   COBALT_API_KEY=your-api-key
    ```
-3. **Player Client Emulation**:
-   Target Android or iOS client APIs:
+3. **Proxy Support**:
+   If needed, configure an HTTP/SOCKS5 proxy:
    ```bash
-   yt-dlp --extractor-args "youtube:player_client=android" ...
+   PROXY_URL=http://user:pass@residential.proxy-provider.com:8000
    ```
 
 ---
@@ -121,4 +121,4 @@ Certain media platforms (like YouTube datacenter blocks) rate-limit known cloud 
 
 1. **Protocol Restriction**: Only `http:` and `https:` schemes allowed.
 2. **SSRF IP Filtering**: Disallow loopback (`127.0.0.1`, `localhost`), link-local metadata (`169.254.169.254`), and RFC 1918 private subnets (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`).
-3. **Command Injection Mitigation**: `yt-dlp` is never invoked through shell interpolation (`child_process.exec`). All arguments are passed as discrete token arrays via `child_process.spawn`.
+3. **Safe Processing**: Media streams are validated and normalized into standard FastStart H.264/AAC MP4 and MP3 containers via discrete child process execution.

@@ -14,20 +14,15 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
 
-# Install runtime system packages: FFmpeg, Python3, and Curl
+# Install runtime system packages: FFmpeg and Curl
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
-    python3 \
     curl \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Install standalone yt-dlp binary
-RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
-    && chmod a+rx /usr/local/bin/yt-dlp
-
 # Verify binaries
-RUN yt-dlp --version && ffmpeg -version
+RUN ffmpeg -version
 
 # Setup app directory & non-root user for security
 RUN groupadd -r clipvault && useradd -r -g clipvault -m -d /home/clipvault clipvault
@@ -40,7 +35,6 @@ RUN npm install --omit=dev
 # Copy built frontend assets, backend server code, and static directories from builder
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/server.ts ./server.ts
-COPY --from=builder /app/server ./server
 COPY --from=builder /app/pastelink ./pastelink
 
 # Ensure proper permissions

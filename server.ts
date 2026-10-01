@@ -6,25 +6,9 @@ import { fileURLToPath } from "url";
 import { Readable } from "stream";
 import { spawn } from "child_process";
 import { createServer as createViteServer } from "vite";
-import { startPotServer } from "./server/pot/pot_server.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-// Binary path for yt-dlp if installed in the container
-const ytdlpPath = fs.existsSync(path.join(process.cwd(), "bin", "yt-dlp"))
-  ? path.join(process.cwd(), "bin", "yt-dlp")
-  : fs.existsSync("/tmp/yt-dlp")
-  ? "/tmp/yt-dlp"
-  : "yt-dlp";
-
-try {
-  if (path.isAbsolute(ytdlpPath) && fs.existsSync(ytdlpPath)) {
-    fs.chmodSync(ytdlpPath, 0o755);
-  }
-} catch {
-  // ignore permission errors
-}
 
 // Supported Platform Types
 export type PlatformType =
@@ -346,11 +330,6 @@ async function startServer() {
   const app = express();
   const PORT = parseInt(process.env.PORT || "3000", 10);
 
-  // Initialize YouTube PO Token provider background server (non-blocking)
-  startPotServer(4416).catch((err: any) => {
-    console.warn("[POT Server] Could not start local POT server:", err?.message || err);
-  });
-
   app.use(express.json());
 
   // Health check endpoints for Docker / Railway / Cloud Run
@@ -380,117 +359,10 @@ async function startServer() {
     return trimmed;
   }
 
-  // Helper: Verify if cookie content matches Netscape HTTP Cookie format
-  // Helper: Check if string has valid Netscape or header cookie format
-  function isValidNetscapeCookies(content: string): boolean {
-    if (!content) return false;
-    const trimmed = content.trim();
-    if (trimmed.length < 10) return false;
-    if (
-      trimmed.includes("# Netscape HTTP Cookie File") ||
-      trimmed.includes("# HTTP Cookie File") ||
-      trimmed.includes(".youtube.com") ||
-      trimmed.includes(".instagram.com") ||
-      trimmed.includes(".facebook.com") ||
-      trimmed.includes(".tiktok.com") ||
-      trimmed.includes("LOGIN_INFO") ||
-      trimmed.includes("VISITOR_INFO1_LIVE") ||
-      trimmed.includes("sessionid") ||
-      trimmed.includes("ds_user_id") ||
-      trimmed.includes("csrftoken") ||
-      trimmed.includes("mid=") ||
-      trimmed.includes("ig_did") ||
-      trimmed.includes("HSID") ||
-      trimmed.includes("SSID") ||
-      trimmed.includes("SID=")
-    ) {
-      return true;
-    }
-    // Tab or whitespace-separated columns
-    const lines = trimmed.split("\n");
-    for (const line of lines) {
-      const trimmedLine = line.trim();
-      if (!trimmedLine || trimmedLine.startsWith("#")) continue;
-      const parts = line.split(/[\t\s]+/);
-      if (parts.length >= 5) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  // Helper: Validate and return a safe path to Netscape cookies if legitimately provided
-  function getValidCookiesArgument(): string | null {
-    // 1. Explicit file path from YTDLP_COOKIES_PATH
-    const cookiePath = getValidEnvString(process.env.YTDLP_COOKIES_PATH);
-    if (cookiePath && fs.existsSync(cookiePath)) {
-      try {
-        const content = fs.readFileSync(cookiePath, "utf-8");
-        if (isValidNetscapeCookies(content)) {
-          return cookiePath;
-        } else {
-          console.log(
-            `[Cookies Config] Provided cookie file "${cookiePath}" does not contain valid cookies; ignoring.`
-          );
-        }
-      } catch {}
-    }
-
-    // 2. Inline Netscape cookie content from YTDLP_COOKIES_CONTENT or INSTAGRAM_COOKIES_CONTENT or COOKIES_CONTENT
-    const cookieContent =
-      getValidEnvString(process.env.YTDLP_COOKIES_CONTENT) ||
-      getValidEnvString(process.env.INSTAGRAM_COOKIES_CONTENT) ||
-      getValidEnvString(process.env.COOKIES_CONTENT);
-    const cookieTmpPath = path.join("/tmp", "ytdlp_cookies.txt");
-    if (cookieContent) {
-      if (isValidNetscapeCookies(cookieContent)) {
-        try {
-          // Ensure file begins with Netscape header for yt-dlp compatibility
-          let formattedContent = cookieContent.trim();
-          if (!formattedContent.startsWith("# Netscape HTTP Cookie File")) {
-            formattedContent = `# Netscape HTTP Cookie File\n${formattedContent}`;
-          }
-          fs.writeFileSync(cookieTmpPath, formattedContent, "utf-8");
-          return cookieTmpPath;
-        } catch {}
-      } else {
-        console.log(
-          "[Cookies Config] Provided cookie content is not in recognized cookie format; ignoring."
-        );
-        try {
-          if (fs.existsSync(cookieTmpPath)) fs.unlinkSync(cookieTmpPath);
-        } catch {}
-      }
-    } else {
-      // Clean up stale /tmp/ytdlp_cookies.txt if no cookies are set
-      try {
-        if (fs.existsSync(cookieTmpPath)) {
-          const existing = fs.readFileSync(cookieTmpPath, "utf-8");
-          if (!isValidNetscapeCookies(existing)) {
-            fs.unlinkSync(cookieTmpPath);
-          }
-        }
-      } catch {}
-    }
-
-    // 3. Local cookies.txt in workspace root
-    const rootCookies = path.join(process.cwd(), "cookies.txt");
-    if (fs.existsSync(rootCookies)) {
-      try {
-        const content = fs.readFileSync(rootCookies, "utf-8");
-        if (isValidNetscapeCookies(content)) {
-          return rootCookies;
-        }
-      } catch {}
-    }
-
-    return null;
-  }
-
   // Helper: Validate proxy URL (must start with http://, https://, or socks://)
   function getValidProxy(): string | null {
     const rawProxy = getValidEnvString(
-      process.env.YTDLP_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY
+      process.env.PROXY_URL || process.env.HTTPS_PROXY || process.env.HTTP_PROXY
     );
     if (!rawProxy) return null;
     if (/^(https?|socks4a?|socks5h?):\/\//i.test(rawProxy)) {
@@ -785,280 +657,182 @@ async function startServer() {
     }
   }
 
-  // Helper: Download and mux media using native yt-dlp + ffmpeg
-  async function downloadMediaViaYtDlp(
-    targetUrl: string,
-    outputPathBase: string,
-    isAudio: boolean,
-    quality: string
-  ): Promise<{ success: boolean; filePath?: string; error?: string; isBotVerification?: boolean }> {
-    const ext = isAudio ? "mp3" : "mp4";
-    const expectedFilePath = `${outputPathBase}.${ext}`;
-
-    const nodePath = process.execPath || "/usr/local/bin/node";
-    const validProxy = getValidProxy();
-    const validCookiesPath = getValidCookiesArgument();
-
-    // Helper to run yt-dlp with specific arguments
-    const runYtDlpAttempt = (formatArg: string, clientArgs?: string): Promise<{ code: number | null; stderr: string; stdout: string }> => {
-      return new Promise((resolveAttempt) => {
-        const args: string[] = [
-          "--no-warnings",
-          "--no-playlist",
-          "--retries", "3",
-          "--fragment-retries", "3",
-          "--ffmpeg-location", "/usr/bin",
-          "--js-runtimes", `node:${nodePath}`,
-        ];
-
-        if (validProxy) {
-          args.push("--proxy", validProxy);
-        }
-
-        if (validCookiesPath) {
-          args.push("--cookies", validCookiesPath);
-        }
-
-        if ((targetUrl.includes("youtube.com") || targetUrl.includes("youtu.be")) && clientArgs) {
-          args.push("--extractor-args", `youtube:player_client=${clientArgs}`);
-        }
-
-        if (targetUrl.includes("instagram.com") || targetUrl.includes("instagr.am")) {
-          args.push(
-            "--add-header",
-            "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "--add-header",
-            "Accept-Language:en-US,en;q=0.9"
-          );
-        }
-
-        if (isAudio) {
-          args.push("-x", "--audio-format", "mp3", "-f", formatArg, "-o", `${outputPathBase}.raw.%(ext)s`, targetUrl);
-        } else {
-          args.push("-f", formatArg, "--merge-output-format", "mp4", "-o", `${outputPathBase}.raw.%(ext)s`, targetUrl);
-        }
-
-        console.log(`[DEV LOG - Spawning yt-dlp] ${ytdlpPath} (format: ${formatArg}, clients: ${clientArgs || "default"})`);
-        const proc = spawn(ytdlpPath, args);
-        let stderr = "";
-        let stdout = "";
-
-        proc.stderr.on("data", (d) => { stderr += d.toString(); });
-        proc.stdout.on("data", (d) => { stdout += d.toString(); });
-
-        const timer = setTimeout(() => {
-          try { proc.kill("SIGKILL"); } catch {}
-          resolveAttempt({ code: -1, stderr: stderr + "\nTimeout after 60s", stdout });
-        }, 60000);
-
-        proc.on("close", (code) => {
-          clearTimeout(timer);
-          resolveAttempt({ code, stderr, stdout });
-        });
-
-        proc.on("error", (err) => {
-          clearTimeout(timer);
-          resolveAttempt({ code: -1, stderr: err.message, stdout });
-        });
-      });
-    };
-
-    // Helper to find any downloaded file produced by yt-dlp
-    const findProducedFile = (): string | null => {
-      const dir = path.dirname(outputPathBase);
-      const base = path.basename(outputPathBase);
-      try {
-        const files = fs.readdirSync(dir);
-        // Check for exact merged file first
-        const preferredExt = isAudio ? ".mp3" : ".mp4";
-        const exactTarget = `${base}.raw${preferredExt}`;
-        if (files.includes(exactTarget)) {
-          const fullP = path.join(dir, exactTarget);
-          if (fs.existsSync(fullP) && fs.statSync(fullP).size > 1000) {
-            return fullP;
-          }
-        }
-
-        // Filter out intermediate files (.part, .ytdl, .temp, and intermediate unmerged DASH streams like .f137.mp4)
-        const validMatches = files.filter((f) => {
-          if (!f.startsWith(base)) return false;
-          if (f.endsWith(".part") || f.endsWith(".ytdl") || f.endsWith(".temp") || f.endsWith(".aria2")) return false;
-          if (/\.f[0-9]+\./.test(f)) return false;
-          return true;
-        });
-
-        // Pick the largest file (which is the fully merged video+audio file)
-        validMatches.sort((a, b) => {
-          try {
-            return fs.statSync(path.join(dir, b)).size - fs.statSync(path.join(dir, a)).size;
-          } catch {
-            return 0;
-          }
-        });
-
-        for (const m of validMatches) {
-          const fullP = path.join(dir, m);
-          try {
-            const s = fs.statSync(fullP);
-            if (s.size > 1000) return fullP;
-          } catch {}
-        }
-      } catch {}
-      return null;
-    };
-
-    // Attempt 1: Prioritize standard H.264 (avc1) video and AAC (mp4a) audio so it remuxes seamlessly into playable MP4
-    const primaryFormat = isAudio
-      ? "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio/best"
-      : quality.toUpperCase() === "SD"
-        ? "bv*[vcodec^=avc1][height<=720]+ba[acodec^=mp4a]/bv*[ext=mp4][height<=720]+ba[ext=m4a]/b[ext=mp4][height<=720]/best[height<=720]/best"
-        : "bv*[vcodec^=avc1][height<=1080]+ba[acodec^=mp4a]/bv*[ext=mp4][height<=1080]+ba[ext=m4a]/b[ext=mp4][height<=1080]/best[height<=1080]/best";
-
-    let attemptResult = await runYtDlpAttempt(primaryFormat);
-    let foundFile = findProducedFile();
-
-    // Attempt 2 (Fallback): If first attempt failed to produce a file, retry with relaxed format and alternative player clients
-    if (!foundFile) {
-      console.log("[Universal Media] Primary format attempt did not produce media, running fallback attempt...");
-      const fallbackFormat = isAudio ? "bestaudio/best/18" : "bestvideo+bestaudio/best/18/b";
-      attemptResult = await runYtDlpAttempt(fallbackFormat, "android,ios,mweb");
-      foundFile = findProducedFile();
-    }
-
-    if (foundFile) {
-      console.log(`[Universal Media] Found raw extractor file: ${foundFile}, running compatibility check`);
-      try {
-        const convResult = await ensureUniversalMedia(foundFile, expectedFilePath, isAudio, quality);
-        if (convResult.success && fs.existsSync(expectedFilePath)) {
-          if (foundFile !== expectedFilePath && fs.existsSync(foundFile)) {
-            try { fs.unlinkSync(foundFile); } catch {}
-          }
-          return { success: true, filePath: expectedFilePath };
-        }
-      } catch (convErr: any) {
-        console.warn("[Universal Media] Transcoding check failed:", convErr?.message);
-      }
-
-      // Safe fallback: if transcode had an issue, serve the raw downloaded file directly!
-      if (fs.existsSync(foundFile) && fs.statSync(foundFile).size > 1000) {
-        console.log(`[Universal Media] Falling back to raw downloaded file: ${foundFile}`);
-        return { success: true, filePath: foundFile };
-      }
-    }
-
-    // Process error message
-    const stderr = attemptResult.stderr;
-    const isBotVerification =
-      stderr.includes("Sign in to confirm you’re not a bot") ||
-      stderr.includes("confirm you're not a bot") ||
-      stderr.includes("bot verification") ||
-      stderr.includes("Failed to extract any player response") ||
-      stderr.includes("login page") ||
-      stderr.includes("HTTP Error 429") ||
-      stderr.includes("429 Too Many Requests");
-
-    const isInstagram =
-      targetUrl.includes("instagram.com") ||
-      targetUrl.includes("instagr.am") ||
-      stderr.includes("[Instagram]");
-    const isYouTube =
-      targetUrl.includes("youtube.com") ||
-      targetUrl.includes("youtu.be") ||
-      stderr.includes("[youtube]");
-
-    let friendlyError = "Failed to extract media stream from the provided link.";
-    if (isBotVerification) {
-      if (isInstagram) {
-        friendlyError =
-          "Instagram is redirecting anonymous requests from this cloud server to its login page. To enable Instagram Reel downloads on Render, add your Instagram cookies to the YTDLP_COOKIES_CONTENT environment variable, or try another video link.";
-      } else if (isYouTube) {
-        friendlyError =
-          "YouTube is blocking requests from this cloud server (bot verification). To enable YouTube downloads on Render, add your YouTube cookies to the YTDLP_COOKIES_CONTENT environment variable, or try another video link.";
-      } else {
-        friendlyError =
-          "The platform is rate-limiting or requiring login for cloud server requests. Add your cookies to the YTDLP_COOKIES_CONTENT environment variable, or try another video link.";
-      }
-    } else if (
-      stderr.includes("Video unavailable") ||
-      stderr.includes("This video is unavailable")
-    ) {
-      friendlyError = "This video is unavailable or has been removed from the platform.";
-    } else if (stderr.includes("Private video") || stderr.includes("private video")) {
-      friendlyError = "This video is private and cannot be downloaded.";
-    } else if (stderr.includes("Login required") || stderr.includes("requires authentication")) {
-      friendlyError = "This media requires an account login to view or download.";
-    } else {
-      const errLines = stderr.split("\n").filter((l) => l.includes("ERROR:"));
-      if (errLines.length > 0) {
-        friendlyError = errLines[errLines.length - 1].replace(/ERROR:\s*(\[[^\]]+\]\s*)?/, "").trim();
-      }
-    }
-
-    console.log(`[Media Extractor Status] exitCode: ${attemptResult.code}, message: ${friendlyError}`);
-    return { success: false, error: friendlyError, isBotVerification };
-  }
-
-  // Optional Helper: Cobalt API instance if user has a private instance configured
+  // Helper: Query Cobalt API to extract direct stream URL
   async function extractViaCobalt(
     mediaUrl: string,
     quality: string,
     isAudio: boolean
   ): Promise<{ streamUrl?: string; filename?: string; error?: string }> {
-    const cobaltUrl = getValidEnvString(process.env.COBALT_API_URL);
-    if (!cobaltUrl || !/^https?:\/\//i.test(cobaltUrl)) {
-      return { error: "No Cobalt API configured" };
-    }
     const vQuality = quality.toUpperCase() === "SD" ? "720" : "1080";
     const cobaltBody: any = {
       url: mediaUrl,
       vCodec: "h264",
       vQuality: vQuality,
-      filenamePattern: "basic",
       videoQuality: vQuality,
       youtubeVideoCodec: "h264",
-      filenameStyle: "basic",
+      audioFormat: "mp3",
       downloadMode: isAudio ? "audio" : "auto",
+      filenameStyle: "basic",
     };
 
-    try {
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-      };
-      const apiKey = getValidEnvString(process.env.COBALT_API_KEY);
-      if (apiKey) {
-        headers["Authorization"] = `Api-Key ${apiKey}`;
-      }
+    // Candidate Cobalt endpoints to try
+    const candidates: string[] = [];
+    const userCobaltUrl = getValidEnvString(process.env.COBALT_API_URL);
+    if (userCobaltUrl && /^https?:\/\//i.test(userCobaltUrl)) {
+      candidates.push(userCobaltUrl);
+    }
+    // Public/community Cobalt instances
+    candidates.push(
+      "https://api.cobalt.tools",
+      "https://cobalt.tools",
+      "https://co.wuk.sh",
+      "https://api.wuk.sh",
+      "https://dl.cobalt.tools"
+    );
 
-      const postRes = await fetch(cobaltUrl, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(cobaltBody),
-        signal: AbortSignal.timeout(12000),
-      });
+    const apiKey = getValidEnvString(process.env.COBALT_API_KEY);
+    const authHeader = apiKey
+      ? (apiKey.startsWith("Bearer ") || apiKey.startsWith("Api-Key ") ? apiKey : `Api-Key ${apiKey}`)
+      : undefined;
 
-      if (postRes.ok) {
-        const data: any = await postRes.json().catch(() => null);
-        if (data) {
-          if (typeof data.url === "string" && data.url.startsWith("http")) {
-            return { streamUrl: data.url, filename: data.filename };
-          }
-          if (
-            (data.status === "stream" || data.status === "tunnel" || data.status === "redirect") &&
-            typeof data.url === "string" &&
-            data.url.startsWith("http")
-          ) {
-            return { streamUrl: data.url, filename: data.filename };
+    let lastError: string | null = null;
+
+    for (const inst of candidates) {
+      try {
+        const headers: Record<string, string> = {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        };
+        if (authHeader) headers["Authorization"] = authHeader;
+
+        // Try direct endpoint or /api/json
+        const endpoint = inst.endsWith("/api/json") ? inst : inst.replace(/\/+$/, "");
+
+        const res = await fetch(endpoint, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(cobaltBody),
+          signal: AbortSignal.timeout(12000),
+        });
+
+        const data: any = await res.json().catch(() => null);
+        if (!data) {
+          lastError = `No JSON response from ${inst}`;
+          continue;
+        }
+
+        if (data.status === "error" || data.error) {
+          const errCode = data.error?.code || data.error || data.text;
+          console.warn(`[Cobalt API] ${inst} error:`, errCode);
+          lastError = typeof errCode === "string" ? errCode : JSON.stringify(errCode);
+          continue;
+        }
+
+        if (typeof data.url === "string" && data.url.startsWith("http")) {
+          return { streamUrl: data.url, filename: data.filename };
+        }
+
+        if (
+          (data.status === "stream" || data.status === "tunnel" || data.status === "redirect" || data.status === "success") &&
+          typeof data.url === "string" &&
+          data.url.startsWith("http")
+        ) {
+          return { streamUrl: data.url, filename: data.filename };
+        }
+
+        if (data.status === "picker" && Array.isArray(data.picker) && data.picker.length > 0) {
+          const match =
+            data.picker.find((p: any) => isAudio ? p.type === "audio" : p.type === "video") ||
+            data.picker[0];
+          if (match && typeof match.url === "string" && match.url.startsWith("http")) {
+            return { streamUrl: match.url, filename: data.filename };
           }
         }
+      } catch (err: any) {
+        lastError = err?.message || "Connection timeout";
+        console.warn(`[Cobalt API] Failed connecting to ${inst}:`, err?.message);
       }
-    } catch {
-      // ignore
     }
 
-    return { error: "Cobalt extraction failed" };
+    let friendlyError = "Failed to extract media stream from Cobalt API.";
+    if (lastError?.includes("auth") || lastError?.includes("jwt")) {
+      friendlyError =
+        "Cobalt API requires authentication or a private instance. Add your instance URL to COBALT_API_URL or your key to COBALT_API_KEY in your environment.";
+    } else if (lastError?.includes("rate_exceeded") || lastError?.includes("rate")) {
+      friendlyError =
+        "Cobalt API rate limit reached on the public cluster. Please wait a moment or configure your own COBALT_API_URL.";
+    } else if (lastError) {
+      friendlyError = `Cobalt API: ${lastError}`;
+    }
+
+    return { error: friendlyError };
+  }
+
+  // Helper: Download and mux media using Cobalt API + FFmpeg
+  async function downloadMediaViaCobalt(
+    targetUrl: string,
+    outputPathBase: string,
+    isAudio: boolean,
+    quality: string
+  ): Promise<{ success: boolean; filePath?: string; error?: string }> {
+    const ext = isAudio ? "mp3" : "mp4";
+    const expectedFilePath = `${outputPathBase}.${ext}`;
+
+    console.log(`[Cobalt Engine] Resolving media stream for ${targetUrl} (${quality}, audio: ${isAudio})`);
+    const cobaltRes = await extractViaCobalt(targetUrl, quality, isAudio);
+
+    if (!cobaltRes.streamUrl) {
+      return { success: false, error: cobaltRes.error || "Failed to resolve stream with Cobalt API." };
+    }
+
+    console.log(`[Cobalt Engine] Stream URL obtained: ${cobaltRes.streamUrl.slice(0, 80)}...`);
+
+    try {
+      const streamRes = await fetch(cobaltRes.streamUrl, {
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        },
+        signal: AbortSignal.timeout(60000),
+      });
+
+      if (!streamRes.ok) {
+        return {
+          success: false,
+          error: `Media host returned HTTP ${streamRes.status} when fetching file bytes.`,
+        };
+      }
+
+      const tempRawPath = `${outputPathBase}.cobalt.raw`;
+      const buf = Buffer.from(await streamRes.arrayBuffer());
+      if (buf.length < 1000) {
+        return { success: false, error: "Retrieved empty or incomplete media stream from host." };
+      }
+
+      fs.writeFileSync(tempRawPath, buf);
+
+      // Run FFmpeg universal compatibility check and remux
+      const convResult = await ensureUniversalMedia(tempRawPath, expectedFilePath, isAudio, quality);
+      try { if (fs.existsSync(tempRawPath)) fs.unlinkSync(tempRawPath); } catch {}
+
+      if (convResult.success && fs.existsSync(expectedFilePath)) {
+        return { success: true, filePath: expectedFilePath };
+      }
+
+      // If transcode had an issue, serve raw file
+      if (fs.existsSync(tempRawPath) && fs.statSync(tempRawPath).size > 1000) {
+        return { success: true, filePath: tempRawPath };
+      }
+
+      return { success: false, error: "Failed to finalize media container format." };
+    } catch (fetchErr: any) {
+      return {
+        success: false,
+        error: `Stream download failed: ${fetchErr?.message || "Unknown error"}`,
+      };
+    }
   }
 
   // Common Handler for Metadata Extraction
@@ -1513,7 +1287,7 @@ async function startServer() {
           }
         }
       } catch (tiktokDirectErr: any) {
-        console.warn("[Stream Handler - TikTok direct stream fallback failed, using yt-dlp]", tiktokDirectErr?.message);
+        console.warn("[Stream Handler - TikTok direct stream fallback failed, using Cobalt API]", tiktokDirectErr?.message);
       }
     }
 
@@ -1548,18 +1322,18 @@ async function startServer() {
           }
         }
       } catch (igDirectErr: any) {
-        console.warn("[Stream Handler - Instagram direct stream fallback failed, using yt-dlp]", igDirectErr?.message);
+        console.warn("[Stream Handler - Instagram direct stream fallback failed, using Cobalt API]", igDirectErr?.message);
       }
     }
 
     const tempFileBase = path.join("/tmp", `pastelink_${job.jobId}_${quality}_${Date.now()}`);
     console.log(`[DEV LOG - Starting Extraction] jobId: ${job.jobId}, platform: ${job.platform}, format: ${quality}`);
 
-    const ytdlResult = await downloadMediaViaYtDlp(job.normalizedUrl, tempFileBase, isAudio, quality);
+    const cobaltResult = await downloadMediaViaCobalt(job.normalizedUrl, tempFileBase, isAudio, quality);
 
-    if (ytdlResult.success && ytdlResult.filePath && fs.existsSync(ytdlResult.filePath)) {
+    if (cobaltResult.success && cobaltResult.filePath && fs.existsSync(cobaltResult.filePath)) {
       try {
-        const finalPath = ytdlResult.filePath;
+        const finalPath = cobaltResult.filePath;
         setTimeout(() => {
           try { if (fs.existsSync(finalPath)) fs.unlinkSync(finalPath); } catch {}
         }, 15 * 60 * 1000);
@@ -1679,8 +1453,8 @@ async function startServer() {
       }
     }
 
-    // Universal Direct Web Fallback: If yt-dlp failed, check if the URL directly serves media bytes
-    if (!ytdlResult.success && !directFallbackUrl) {
+    // Universal Direct Web Fallback: If Cobalt failed, check if the URL directly serves media bytes
+    if (!cobaltResult.success && !directFallbackUrl) {
       try {
         console.log("[DEV LOG - Attempting Direct Web Stream Fallback]", job.normalizedUrl);
         const webRes = await fetch(job.normalizedUrl, {
@@ -1711,7 +1485,7 @@ async function startServer() {
 
     // Return the specific, descriptive error returned by the extractor
     const errMsg =
-      ytdlResult.error ||
+      cobaltResult.error ||
       `Unable to extract downloadable stream for this ${job.platform} video at this time. The media may be private, restricted, or rate-limited.`;
     const isBot = Boolean(
       errMsg.includes("bot verification") ||
@@ -1759,37 +1533,37 @@ async function startServer() {
     }
 
     const tempFileBase = path.join("/tmp", `pastelink_direct_${Date.now()}`);
-    const ytdlResult = await downloadMediaViaYtDlp(rawUrl, tempFileBase, isAudio, quality);
-    if (ytdlResult.success && ytdlResult.filePath && fs.existsSync(ytdlResult.filePath)) {
+    const cobaltDirectResult = await downloadMediaViaCobalt(rawUrl, tempFileBase, isAudio, quality);
+    if (cobaltDirectResult.success && cobaltDirectResult.filePath && fs.existsSync(cobaltDirectResult.filePath)) {
       try {
-        const stats = fs.statSync(ytdlResult.filePath);
+        const stats = fs.statSync(cobaltDirectResult.filePath);
         const safeName = sanitizeFilename("media", isAudio ? "mp3" : "mp4");
         res.setHeader("Content-Type", isAudio ? "audio/mpeg" : "video/mp4");
         res.setHeader("Content-Disposition", `attachment; filename="${safeName}"`);
         res.setHeader("Content-Length", stats.size);
         res.setHeader("Cache-Control", "no-store");
 
-        const fileStream = fs.createReadStream(ytdlResult.filePath);
+        const fileStream = fs.createReadStream(cobaltDirectResult.filePath);
         fileStream.pipe(res);
 
         const cleanup = () => {
-          if (ytdlResult.filePath && fs.existsSync(ytdlResult.filePath)) {
-            fs.unlink(ytdlResult.filePath, () => {});
-          }
+          try {
+            if (cobaltDirectResult.filePath && fs.existsSync(cobaltDirectResult.filePath)) {
+              fs.unlinkSync(cobaltDirectResult.filePath);
+            }
+          } catch {}
         };
-
         fileStream.on("close", cleanup);
         res.on("close", cleanup);
-        res.on("error", cleanup);
         return;
-      } catch {
-        // ignore
+      } catch (pipeErr: any) {
+        return res.status(500).json({ success: false, error: pipeErr?.message || "Stream error." });
       }
     }
 
     return res.status(502).json({
       success: false,
-      error: ytdlResult.error || "Unable to extract media stream for direct request.",
+      error: cobaltDirectResult.error || "Cobalt API was unable to stream this URL.",
     });
   }
 
