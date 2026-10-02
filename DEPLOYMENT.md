@@ -94,23 +94,19 @@ For multi-instance horizontal scaling (Kubernetes / ECS / Cloud Run):
 
 ---
 
-## 4. Platform Engine & Cobalt API Strategy
+## 4. Platform Anti-Bot & Cookie Injection Strategy
 
-ClipVault uses the modern, lightweight Cobalt API engine for media stream extraction.
+Certain media platforms (like YouTube and Instagram) block cloud hosting datacenter IP ranges (Render, AWS, GCP) with bot verification or login redirects.
 
-### Production Configuration:
-1. **Cobalt Instance URL**:
-   Configure a self-hosted or dedicated Cobalt instance in your environment:
+### Production Solutions on Render:
+1. **Cookie Injection (`YTDLP_COOKIES_CONTENT`)**:
+   Export your authenticated session cookies (from instagram.com or youtube.com) using the free Chrome/Firefox extension *"Get cookies.txt LOCALLY"*.
+   In your **Render Dashboard &rarr; Environment**:
    ```bash
-   COBALT_API_URL=https://your-cobalt-instance.com
+   YTDLP_COOKIES_CONTENT=[paste exported cookies text here]
    ```
-2. **API Key (Optional)**:
-   If your Cobalt instance requires an API token:
-   ```bash
-   COBALT_API_KEY=your-api-key
-   ```
-3. **Proxy Support**:
-   If needed, configure an HTTP/SOCKS5 proxy:
+2. **Residential Proxy Rotation (`PROXY_URL`)**:
+   Pass a residential proxy pool via `PROXY_URL`:
    ```bash
    PROXY_URL=http://user:pass@residential.proxy-provider.com:8000
    ```
@@ -121,4 +117,4 @@ ClipVault uses the modern, lightweight Cobalt API engine for media stream extrac
 
 1. **Protocol Restriction**: Only `http:` and `https:` schemes allowed.
 2. **SSRF IP Filtering**: Disallow loopback (`127.0.0.1`, `localhost`), link-local metadata (`169.254.169.254`), and RFC 1918 private subnets (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`).
-3. **Safe Processing**: Media streams are validated and normalized into standard FastStart H.264/AAC MP4 and MP3 containers via discrete child process execution.
+3. **Command Injection Mitigation**: `yt-dlp` is never invoked through shell interpolation (`child_process.exec`). All arguments are passed as discrete token arrays via `child_process.spawn`.

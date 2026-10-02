@@ -74,7 +74,7 @@ export const HeroSearch: React.FC<HeroSearchProps> = ({
         {/* Kicker */}
         <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-indigo-500/20 bg-indigo-500/10 px-3.5 py-1 text-xs font-medium text-indigo-300">
           <Sparkles className="h-3.5 w-3.5 text-indigo-400" />
-          <span>Cobalt API Engine & FFmpeg 4K Muxing</span>
+          <span>yt-dlp Engine & FFmpeg 4K Muxing</span>
         </div>
 
         {/* Primary Headline */}

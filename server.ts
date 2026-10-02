@@ -10,6 +10,23 @@ import { createServer as createViteServer } from "vite";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Binary path for yt-dlp if installed in the container or bin folder
+const ytdlpPath = fs.existsSync(path.join(process.cwd(), "bin", "yt-dlp"))
+  ? path.join(process.cwd(), "bin", "yt-dlp")
+  : fs.existsSync("/usr/local/bin/yt-dlp")
+  ? "/usr/local/bin/yt-dlp"
+  : fs.existsSync("/tmp/yt-dlp")
+  ? "/tmp/yt-dlp"
+  : "yt-dlp";
+
+try {
+  if (path.isAbsolute(ytdlpPath) && fs.existsSync(ytdlpPath)) {
+    fs.chmodSync(ytdlpPath, 0o755);
+  }
+} catch {
+  // ignore permission errors
+}
+
 // Supported Platform Types
 export type PlatformType =
   | "youtube"
@@ -359,10 +376,116 @@ async function startServer() {
     return trimmed;
   }
 
+  // Helper: Check if string has valid Netscape or header cookie format
+  function isValidNetscapeCookies(content: string): boolean {
+    if (!content) return false;
+    const trimmed = content.trim();
+    if (trimmed.length < 10) return false;
+    if (
+      trimmed.includes("# Netscape HTTP Cookie File") ||
+      trimmed.includes("# HTTP Cookie File") ||
+      trimmed.includes(".youtube.com") ||
+      trimmed.includes(".instagram.com") ||
+      trimmed.includes(".facebook.com") ||
+      trimmed.includes(".tiktok.com") ||
+      trimmed.includes("LOGIN_INFO") ||
+      trimmed.includes("VISITOR_INFO1_LIVE") ||
+      trimmed.includes("sessionid") ||
+      trimmed.includes("ds_user_id") ||
+      trimmed.includes("csrftoken") ||
+      trimmed.includes("mid=") ||
+      trimmed.includes("ig_did") ||
+      trimmed.includes("HSID") ||
+      trimmed.includes("SSID") ||
+      trimmed.includes("SID=")
+    ) {
+      return true;
+    }
+    // Tab or whitespace-separated columns
+    const lines = trimmed.split("\n");
+    for (const line of lines) {
+      const trimmedLine = line.trim();
+      if (!trimmedLine || trimmedLine.startsWith("#")) continue;
+      const parts = line.split(/[\t\s]+/);
+      if (parts.length >= 5) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Helper: Validate and return a safe path to Netscape cookies if legitimately provided
+  function getValidCookiesArgument(): string | null {
+    // 1. Explicit file path from YTDLP_COOKIES_PATH
+    const cookiePath = getValidEnvString(process.env.YTDLP_COOKIES_PATH);
+    if (cookiePath && fs.existsSync(cookiePath)) {
+      try {
+        const content = fs.readFileSync(cookiePath, "utf-8");
+        if (isValidNetscapeCookies(content)) {
+          return cookiePath;
+        } else {
+          console.log(
+            `[Cookies Config] Provided cookie file "${cookiePath}" does not contain valid cookies; ignoring.`
+          );
+        }
+      } catch {}
+    }
+
+    // 2. Inline Netscape cookie content from YTDLP_COOKIES_CONTENT or INSTAGRAM_COOKIES_CONTENT or COOKIES_CONTENT
+    const cookieContent =
+      getValidEnvString(process.env.YTDLP_COOKIES_CONTENT) ||
+      getValidEnvString(process.env.INSTAGRAM_COOKIES_CONTENT) ||
+      getValidEnvString(process.env.COOKIES_CONTENT);
+    const cookieTmpPath = path.join("/tmp", "ytdlp_cookies.txt");
+    if (cookieContent) {
+      if (isValidNetscapeCookies(cookieContent)) {
+        try {
+          // Ensure file begins with Netscape header for yt-dlp compatibility
+          let formattedContent = cookieContent.trim();
+          if (!formattedContent.startsWith("# Netscape HTTP Cookie File")) {
+            formattedContent = `# Netscape HTTP Cookie File\n${formattedContent}`;
+          }
+          fs.writeFileSync(cookieTmpPath, formattedContent, "utf-8");
+          return cookieTmpPath;
+        } catch {}
+      } else {
+        console.log(
+          "[Cookies Config] Provided cookie content is not in recognized cookie format; ignoring."
+        );
+        try {
+          if (fs.existsSync(cookieTmpPath)) fs.unlinkSync(cookieTmpPath);
+        } catch {}
+      }
+    } else {
+      // Clean up stale /tmp/ytdlp_cookies.txt if no cookies are set
+      try {
+        if (fs.existsSync(cookieTmpPath)) {
+          const existing = fs.readFileSync(cookieTmpPath, "utf-8");
+          if (!isValidNetscapeCookies(existing)) {
+            fs.unlinkSync(cookieTmpPath);
+          }
+        }
+      } catch {}
+    }
+
+    // 3. Local cookies.txt in workspace root
+    const rootCookies = path.join(process.cwd(), "cookies.txt");
+    if (fs.existsSync(rootCookies)) {
+      try {
+        const content = fs.readFileSync(rootCookies, "utf-8");
+        if (isValidNetscapeCookies(content)) {
+          return rootCookies;
+        }
+      } catch {}
+    }
+
+    return null;
+  }
+
   // Helper: Validate proxy URL (must start with http://, https://, or socks://)
   function getValidProxy(): string | null {
     const rawProxy = getValidEnvString(
-      process.env.PROXY_URL || process.env.HTTPS_PROXY || process.env.HTTP_PROXY
+      process.env.PROXY_URL || process.env.YTDLP_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY
     );
     if (!rawProxy) return null;
     if (/^(https?|socks4a?|socks5h?):\/\//i.test(rawProxy)) {
@@ -655,6 +778,219 @@ async function startServer() {
       console.warn("[TikWM Extractor] Error fetching metadata:", err?.message);
       return null;
     }
+  }
+
+  // Helper: Download and mux media using native yt-dlp + ffmpeg
+  async function downloadMediaViaYtDlp(
+    targetUrl: string,
+    outputPathBase: string,
+    isAudio: boolean,
+    quality: string
+  ): Promise<{ success: boolean; filePath?: string; error?: string; isBotVerification?: boolean }> {
+    const ext = isAudio ? "mp3" : "mp4";
+    const expectedFilePath = `${outputPathBase}.${ext}`;
+
+    const nodePath = process.execPath || "/usr/local/bin/node";
+    const validProxy = getValidProxy();
+    const validCookiesPath = getValidCookiesArgument();
+
+    // Helper to run yt-dlp with specific arguments
+    const runYtDlpAttempt = (formatArg: string, clientArgs?: string): Promise<{ code: number | null; stderr: string; stdout: string }> => {
+      return new Promise((resolveAttempt) => {
+        const args: string[] = [
+          "--no-warnings",
+          "--no-playlist",
+          "--retries", "3",
+          "--fragment-retries", "3",
+          "--ffmpeg-location", "/usr/bin",
+          "--js-runtimes", `node:${nodePath}`,
+        ];
+
+        if (validProxy) {
+          args.push("--proxy", validProxy);
+        }
+
+        if (validCookiesPath) {
+          args.push("--cookies", validCookiesPath);
+        }
+
+        if ((targetUrl.includes("youtube.com") || targetUrl.includes("youtu.be")) && clientArgs) {
+          args.push("--extractor-args", `youtube:player_client=${clientArgs}`);
+        }
+
+        if (targetUrl.includes("instagram.com") || targetUrl.includes("instagr.am")) {
+          args.push(
+            "--add-header",
+            "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "--add-header",
+            "Accept-Language:en-US,en;q=0.9"
+          );
+        }
+
+        if (isAudio) {
+          args.push("-x", "--audio-format", "mp3", "-f", formatArg, "-o", `${outputPathBase}.raw.%(ext)s`, targetUrl);
+        } else {
+          args.push("-f", formatArg, "--merge-output-format", "mp4", "-o", `${outputPathBase}.raw.%(ext)s`, targetUrl);
+        }
+
+        console.log(`[DEV LOG - Spawning yt-dlp] ${ytdlpPath} (format: ${formatArg}, clients: ${clientArgs || "default"})`);
+        const proc = spawn(ytdlpPath, args);
+        let stderr = "";
+        let stdout = "";
+
+        proc.stderr.on("data", (d) => { stderr += d.toString(); });
+        proc.stdout.on("data", (d) => { stdout += d.toString(); });
+
+        const timer = setTimeout(() => {
+          try { proc.kill("SIGKILL"); } catch {}
+          resolveAttempt({ code: -1, stderr: stderr + "\nTimeout after 60s", stdout });
+        }, 60000);
+
+        proc.on("close", (code) => {
+          clearTimeout(timer);
+          resolveAttempt({ code, stderr, stdout });
+        });
+
+        proc.on("error", (err) => {
+          clearTimeout(timer);
+          resolveAttempt({ code: -1, stderr: err.message, stdout });
+        });
+      });
+    };
+
+    // Helper to find any downloaded file produced by yt-dlp
+    const findProducedFile = (): string | null => {
+      const dir = path.dirname(outputPathBase);
+      const base = path.basename(outputPathBase);
+      try {
+        const files = fs.readdirSync(dir);
+        // Check for exact merged file first
+        const preferredExt = isAudio ? ".mp3" : ".mp4";
+        const exactTarget = `${base}.raw${preferredExt}`;
+        if (files.includes(exactTarget)) {
+          const fullP = path.join(dir, exactTarget);
+          if (fs.existsSync(fullP) && fs.statSync(fullP).size > 1000) {
+            return fullP;
+          }
+        }
+
+        // Filter out intermediate files (.part, .ytdl, .temp, and intermediate unmerged DASH streams like .f137.mp4)
+        const validMatches = files.filter((f) => {
+          if (!f.startsWith(base)) return false;
+          if (f.endsWith(".part") || f.endsWith(".ytdl") || f.endsWith(".temp") || f.endsWith(".aria2")) return false;
+          if (/\.f[0-9]+\./.test(f)) return false;
+          return true;
+        });
+
+        // Pick the largest file (which is the fully merged video+audio file)
+        validMatches.sort((a, b) => {
+          try {
+            return fs.statSync(path.join(dir, b)).size - fs.statSync(path.join(dir, a)).size;
+          } catch {
+            return 0;
+          }
+        });
+
+        for (const m of validMatches) {
+          const fullP = path.join(dir, m);
+          try {
+            const s = fs.statSync(fullP);
+            if (s.size > 1000) return fullP;
+          } catch {}
+        }
+      } catch {}
+      return null;
+    };
+
+    // Attempt 1: Prioritize standard H.264 (avc1) video and AAC (mp4a) audio so it remuxes seamlessly into playable MP4
+    const primaryFormat = isAudio
+      ? "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio/best"
+      : quality.toUpperCase() === "SD"
+        ? "bv*[vcodec^=avc1][height<=720]+ba[acodec^=mp4a]/bv*[ext=mp4][height<=720]+ba[ext=m4a]/b[ext=mp4][height<=720]/best[height<=720]/best"
+        : "bv*[vcodec^=avc1][height<=1080]+ba[acodec^=mp4a]/bv*[ext=mp4][height<=1080]+ba[ext=m4a]/b[ext=mp4][height<=1080]/best[height<=1080]/best";
+
+    let attemptResult = await runYtDlpAttempt(primaryFormat);
+    let foundFile = findProducedFile();
+
+    // Attempt 2 (Fallback): If first attempt failed to produce a file, retry with relaxed format and alternative player clients
+    if (!foundFile) {
+      console.log("[Universal Media] Primary format attempt did not produce media, running fallback attempt...");
+      const fallbackFormat = isAudio ? "bestaudio/best/18" : "bestvideo+bestaudio/best/18/b";
+      attemptResult = await runYtDlpAttempt(fallbackFormat, "android,ios,mweb");
+      foundFile = findProducedFile();
+    }
+
+    if (foundFile) {
+      console.log(`[Universal Media] Found raw extractor file: ${foundFile}, running compatibility check`);
+      try {
+        const convResult = await ensureUniversalMedia(foundFile, expectedFilePath, isAudio, quality);
+        if (convResult.success && fs.existsSync(expectedFilePath)) {
+          if (foundFile !== expectedFilePath && fs.existsSync(foundFile)) {
+            try { fs.unlinkSync(foundFile); } catch {}
+          }
+          return { success: true, filePath: expectedFilePath };
+        }
+      } catch (convErr: any) {
+        console.warn("[Universal Media] Transcoding check failed:", convErr?.message);
+      }
+
+      // Safe fallback: if transcode had an issue, serve the raw downloaded file directly!
+      if (fs.existsSync(foundFile) && fs.statSync(foundFile).size > 1000) {
+        console.log(`[Universal Media] Falling back to raw downloaded file: ${foundFile}`);
+        return { success: true, filePath: foundFile };
+      }
+    }
+
+    // Process error message
+    const stderr = attemptResult.stderr;
+    const isBotVerification =
+      stderr.includes("Sign in to confirm you’re not a bot") ||
+      stderr.includes("confirm you're not a bot") ||
+      stderr.includes("bot verification") ||
+      stderr.includes("Failed to extract any player response") ||
+      stderr.includes("login page") ||
+      stderr.includes("HTTP Error 429") ||
+      stderr.includes("429 Too Many Requests");
+
+    const isInstagram =
+      targetUrl.includes("instagram.com") ||
+      targetUrl.includes("instagr.am") ||
+      stderr.includes("[Instagram]");
+    const isYouTube =
+      targetUrl.includes("youtube.com") ||
+      targetUrl.includes("youtu.be") ||
+      stderr.includes("[youtube]");
+
+    let friendlyError = "Failed to extract media stream from the provided link.";
+    if (isBotVerification) {
+      if (isInstagram) {
+        friendlyError =
+          "Instagram is redirecting anonymous requests from this cloud server to its login page. To enable Instagram Reel downloads on Render, add your Instagram cookies to the YTDLP_COOKIES_CONTENT environment variable, or try another video link.";
+      } else if (isYouTube) {
+        friendlyError =
+          "YouTube is blocking requests from this cloud server (bot verification). To enable YouTube downloads on Render, add your YouTube cookies to the YTDLP_COOKIES_CONTENT environment variable, or try another video link.";
+      } else {
+        friendlyError =
+          "The platform is rate-limiting or requiring login for cloud server requests. Add your cookies to the YTDLP_COOKIES_CONTENT environment variable, or try another video link.";
+      }
+    } else if (
+      stderr.includes("Video unavailable") ||
+      stderr.includes("This video is unavailable")
+    ) {
+      friendlyError = "This video is unavailable or has been removed from the platform.";
+    } else if (stderr.includes("Private video") || stderr.includes("private video")) {
+      friendlyError = "This video is private and cannot be downloaded.";
+    } else if (stderr.includes("Login required") || stderr.includes("requires authentication")) {
+      friendlyError = "This media requires an account login to view or download.";
+    } else {
+      const errLines = stderr.split("\n").filter((l) => l.includes("ERROR:"));
+      if (errLines.length > 0) {
+        friendlyError = errLines[errLines.length - 1].replace(/ERROR:\s*(\[[^\]]+\]\s*)?/, "").trim();
+      }
+    }
+
+    console.log(`[Media Extractor Status] exitCode: ${attemptResult.code}, message: ${friendlyError}`);
+    return { success: false, error: friendlyError, isBotVerification };
   }
 
   // Helper: Query Cobalt API to extract direct stream URL
@@ -1329,11 +1665,12 @@ async function startServer() {
     const tempFileBase = path.join("/tmp", `pastelink_${job.jobId}_${quality}_${Date.now()}`);
     console.log(`[DEV LOG - Starting Extraction] jobId: ${job.jobId}, platform: ${job.platform}, format: ${quality}`);
 
-    const cobaltResult = await downloadMediaViaCobalt(job.normalizedUrl, tempFileBase, isAudio, quality);
+    // PRIMARY: Run native yt-dlp with cookies / proxy / player client emulation
+    const ytdlResult = await downloadMediaViaYtDlp(job.normalizedUrl, tempFileBase, isAudio, quality);
 
-    if (cobaltResult.success && cobaltResult.filePath && fs.existsSync(cobaltResult.filePath)) {
+    if (ytdlResult.success && ytdlResult.filePath && fs.existsSync(ytdlResult.filePath)) {
       try {
-        const finalPath = cobaltResult.filePath;
+        const finalPath = ytdlResult.filePath;
         setTimeout(() => {
           try { if (fs.existsSync(finalPath)) fs.unlinkSync(finalPath); } catch {}
         }, 15 * 60 * 1000);
@@ -1344,80 +1681,15 @@ async function startServer() {
       }
     }
 
-    // 2b. Direct stream fallback if available and not yet attempted
-    if (directFallbackUrl) {
-      try {
-        console.log("[DEV LOG - Attempting Direct Stream Fallback]", directFallbackUrl);
-        const fbRes = await fetch(directFallbackUrl, {
-          headers: {
-            "User-Agent":
-              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-          },
-          signal: AbortSignal.timeout(30000),
-        });
-
-        if (fbRes.ok) {
-          const tempRawFb = path.join("/tmp", `fb_raw_${job.jobId}_${Date.now()}`);
-          const tempOutFb = path.join("/tmp", `fb_univ_${job.jobId}_${isAudio ? "mp3" : "mp4"}`);
-          const buf = Buffer.from(await fbRes.arrayBuffer());
-          fs.writeFileSync(tempRawFb, buf);
-
-          let finalFile: string | null = null;
-          try {
-            const conv = await Promise.race([
-              ensureUniversalMedia(tempRawFb, tempOutFb, isAudio, quality),
-              new Promise<{ success: boolean; filePath: string }>((_, reject) =>
-                setTimeout(() => reject(new Error("Transcode timeout")), 15000)
-              ),
-            ]);
-            if (conv.success && fs.existsSync(conv.filePath) && fs.statSync(conv.filePath).size > 0) {
-              finalFile = conv.filePath;
-            }
-          } catch (convErr: any) {
-            console.warn("[Stream Handler - Direct Fallback Transcode timeout/error]", convErr?.message);
-          }
-
-          if (!finalFile && fs.existsSync(tempRawFb) && fs.statSync(tempRawFb).size > 0) {
-            finalFile = tempRawFb;
-          }
-
-          if (finalFile && fs.existsSync(finalFile)) {
-            const stats = fs.statSync(finalFile);
-            res.setHeader("Content-Type", isAudio ? "audio/mpeg" : "video/mp4");
-            res.setHeader(
-              "Content-Disposition",
-              `attachment; filename="${targetFilename}"; filename*=UTF-8''${encodeURIComponent(targetFilename)}`
-            );
-            res.setHeader("Content-Length", stats.size);
-            res.setHeader("Accept-Ranges", "bytes");
-            res.setHeader("Cache-Control", "no-store");
-
-            const fileStream = fs.createReadStream(finalFile);
-            fileStream.pipe(res);
-
-            const cleanup = () => {
-              try { if (fs.existsSync(tempRawFb)) fs.unlinkSync(tempRawFb); } catch {}
-              try { if (fs.existsSync(tempOutFb)) fs.unlinkSync(tempOutFb); } catch {}
-            };
-            fileStream.on("close", cleanup);
-            res.on("close", cleanup);
-            return;
-          }
-        }
-      } catch (fbErr: any) {
-        console.warn("[Stream Handler - Direct Fallback Error]", fbErr?.message);
-      }
-    }
-
     // Secondary fallback: Cobalt API if user has configured an instance
     if (getValidEnvString(process.env.COBALT_API_URL)) {
-      const cobaltResult = await extractViaCobalt(job.normalizedUrl, quality, isAudio);
-      if (cobaltResult.streamUrl) {
-        try {
+      try {
+        const cobaltResult = await extractViaCobalt(job.normalizedUrl, quality, isAudio);
+        if (cobaltResult.streamUrl) {
           const mediaRes = await fetch(cobaltResult.streamUrl, {
             headers: {
               "User-Agent":
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
               Accept: "*/*",
             },
             signal: AbortSignal.timeout(35000),
@@ -1447,14 +1719,14 @@ async function startServer() {
               return res.end(buf);
             }
           }
-        } catch (streamErr: any) {
-          console.warn("[cobalt stream error]", streamErr?.message);
         }
+      } catch (streamErr: any) {
+        console.warn("[cobalt stream error]", streamErr?.message);
       }
     }
 
-    // Universal Direct Web Fallback: If Cobalt failed, check if the URL directly serves media bytes
-    if (!cobaltResult.success && !directFallbackUrl) {
+    // Universal Direct Web Fallback: Check if the URL directly serves media bytes
+    if (!ytdlResult.success && !directFallbackUrl) {
       try {
         console.log("[DEV LOG - Attempting Direct Web Stream Fallback]", job.normalizedUrl);
         const webRes = await fetch(job.normalizedUrl, {
@@ -1485,12 +1757,14 @@ async function startServer() {
 
     // Return the specific, descriptive error returned by the extractor
     const errMsg =
-      cobaltResult.error ||
+      ytdlResult.error ||
       `Unable to extract downloadable stream for this ${job.platform} video at this time. The media may be private, restricted, or rate-limited.`;
     const isBot = Boolean(
+      ytdlResult.isBotVerification ||
       errMsg.includes("bot verification") ||
       errMsg.includes("not a bot") ||
-      errMsg.includes("Sign in to confirm")
+      errMsg.includes("Sign in to confirm") ||
+      errMsg.includes("login page")
     );
 
     return res.status(502).json({
@@ -1533,23 +1807,23 @@ async function startServer() {
     }
 
     const tempFileBase = path.join("/tmp", `pastelink_direct_${Date.now()}`);
-    const cobaltDirectResult = await downloadMediaViaCobalt(rawUrl, tempFileBase, isAudio, quality);
-    if (cobaltDirectResult.success && cobaltDirectResult.filePath && fs.existsSync(cobaltDirectResult.filePath)) {
+    const ytdlDirectResult = await downloadMediaViaYtDlp(rawUrl, tempFileBase, isAudio, quality);
+    if (ytdlDirectResult.success && ytdlDirectResult.filePath && fs.existsSync(ytdlDirectResult.filePath)) {
       try {
-        const stats = fs.statSync(cobaltDirectResult.filePath);
+        const stats = fs.statSync(ytdlDirectResult.filePath);
         const safeName = sanitizeFilename("media", isAudio ? "mp3" : "mp4");
         res.setHeader("Content-Type", isAudio ? "audio/mpeg" : "video/mp4");
         res.setHeader("Content-Disposition", `attachment; filename="${safeName}"`);
         res.setHeader("Content-Length", stats.size);
         res.setHeader("Cache-Control", "no-store");
 
-        const fileStream = fs.createReadStream(cobaltDirectResult.filePath);
+        const fileStream = fs.createReadStream(ytdlDirectResult.filePath);
         fileStream.pipe(res);
 
         const cleanup = () => {
           try {
-            if (cobaltDirectResult.filePath && fs.existsSync(cobaltDirectResult.filePath)) {
-              fs.unlinkSync(cobaltDirectResult.filePath);
+            if (ytdlDirectResult.filePath && fs.existsSync(ytdlDirectResult.filePath)) {
+              fs.unlinkSync(ytdlDirectResult.filePath);
             }
           } catch {}
         };
@@ -1563,7 +1837,7 @@ async function startServer() {
 
     return res.status(502).json({
       success: false,
-      error: cobaltDirectResult.error || "Cobalt API was unable to stream this URL.",
+      error: ytdlDirectResult.error || "Unable to extract media stream for direct request.",
     });
   }
 

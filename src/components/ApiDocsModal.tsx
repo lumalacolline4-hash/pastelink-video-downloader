@@ -182,7 +182,7 @@ export const ApiDocsModal: React.FC<ApiDocsModalProps> = ({ isOpen, onClose }) =
                 <span>Production Containerization</span>
               </div>
               <p className="text-slate-400">
-                ClipVault ships with a ready-to-run multi-stage <code className="text-indigo-300">Dockerfile</code> and <code className="text-indigo-300">docker-compose.yml</code> configured with FFmpeg, Cobalt API engine, and Node 22.
+                ClipVault ships with a ready-to-run multi-stage <code className="text-indigo-300">Dockerfile</code> and <code className="text-indigo-300">docker-compose.yml</code> configured with FFmpeg, standalone yt-dlp, and Node 22.
               </p>
 
               <div className="rounded-xl border border-slate-800 bg-slate-950 p-3.5 font-mono text-[11px] text-slate-300 space-y-2">

@@ -12,7 +12,7 @@ const FAQS: FaqItem[] = [
     question: 'How does ClipVault strip TikTok watermarks automatically?',
     icon: Zap,
     answer:
-      'ClipVault leverages specialized Cobalt API engine rules that intercept TikTok’s native content delivery network (CDN) before the animated bouncing logo and outro video frames are multiplexed. This results in the clean, original high-definition camera file.',
+      'ClipVault leverages specialized yt-dlp and CDN extractor rules that intercept TikTok’s native content delivery network (CDN) before the animated bouncing logo and outro video frames are multiplexed. This results in the clean, original high-definition camera file.',
   },
   {
     question: 'Why do Reddit videos often download without sound elsewhere, and how does ClipVault fix it?',
@@ -30,7 +30,7 @@ const FAQS: FaqItem[] = [
     question: 'How does real-time progress tracking work without WebSockets?',
     icon: Zap,
     answer:
-      'ClipVault uses Server-Sent Events (SSE) via the `/api/download/progress/:taskId` endpoint. As the Cobalt API stream transits through our Express backend, it tracks transfer speeds, percentages, and ETA estimates in real-time, emitting event frames with `X-Accel-Buffering: no` for zero latency.',
+      'ClipVault uses Server-Sent Events (SSE) via the `/api/download/progress/:taskId` endpoint. As yt-dlp outputs its stdout/stderr download chunks, our Express backend parses transfer speeds, percentages, and ETA estimates in real-time, emitting event frames with `X-Accel-Buffering: no` for zero latency.',
   },
   {
     question: 'How are Server-Side Request Forgery (SSRF) and command injections prevented?',
