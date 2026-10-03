@@ -26,7 +26,7 @@ export default function App() {
   }, []);
 
   // Process URL using the backend contract: POST /api/download with JSON body
-  const handleFetchVideo = async (url: string) => {
+  const handleFetchVideo = async (url: string, engine: 'cobalt' | 'ytdlp' = 'cobalt') => {
     let targetUrl = url.trim();
     const platform = detectPlatform(targetUrl);
     const isYouTube = platform === 'youtube';
@@ -35,7 +35,7 @@ export default function App() {
     if (isYouTube) {
       targetUrl = cleanYouTubeUrl(targetUrl);
     }
-    console.log('[Pastelink] Processing targetUrl:', targetUrl);
+    console.log('[Pastelink] Processing targetUrl:', targetUrl, 'engine:', engine);
 
     setIsLoading(true);
     setServerError(null);
@@ -59,7 +59,7 @@ export default function App() {
           Expires: '0',
           Accept: 'application/json',
         },
-        body: JSON.stringify({ url: targetUrl }),
+        body: JSON.stringify({ url: targetUrl, engine }),
       });
 
       clearTimeout(timeoutId);

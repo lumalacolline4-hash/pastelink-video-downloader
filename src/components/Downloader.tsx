@@ -3,7 +3,7 @@ import { Link, Clipboard, ArrowDown, Loader2, AlertCircle, ExternalLink } from '
 import { detectPlatform } from '../utils/detector';
 
 interface DownloaderProps {
-  onFetchVideo: (url: string) => void;
+  onFetchVideo: (url: string, engine?: 'cobalt' | 'ytdlp') => void;
   isLoading: boolean;
   serverError: string | null;
 }
@@ -33,6 +33,7 @@ export const Downloader: React.FC<DownloaderProps> = ({
 }) => {
   const [url, setUrl] = useState('');
   const [detected, setDetected] = useState<string>('unknown');
+  const [engine, setEngine] = useState<'cobalt' | 'ytdlp'>('cobalt');
 
   useEffect(() => {
     if (url.trim()) {
@@ -45,7 +46,7 @@ export const Downloader: React.FC<DownloaderProps> = ({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!url.trim() || isLoading) return;
-    onFetchVideo(url.trim());
+    onFetchVideo(url.trim(), engine);
   };
 
   const handlePaste = async () => {
@@ -54,7 +55,7 @@ export const Downloader: React.FC<DownloaderProps> = ({
         const text = await navigator.clipboard.readText();
         if (text && text.trim()) {
           setUrl(text.trim());
-          onFetchVideo(text.trim());
+          onFetchVideo(text.trim(), engine);
         }
       }
     } catch {
@@ -73,12 +74,41 @@ export const Downloader: React.FC<DownloaderProps> = ({
       <div className="bg-white border-2 border-[#00e575] rounded-3xl p-6 sm:p-9 shadow-[0_0_35px_rgba(0,229,117,0.18)] transition-all">
         {/* Top Detection & Chips */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 pb-5 border-b border-zinc-100">
-          {/* Auto Detect Label */}
-          <div className="flex items-center gap-2 shrink-0">
-            <span className="text-[#00e575] text-base font-bold">✦</span>
-            <div className="flex flex-col text-[11px] font-black tracking-wider text-zinc-950 uppercase leading-none">
-              <span>AUTO</span>
-              <span>DETECT</span>
+          {/* Auto Detect Label & Engine Switcher */}
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="text-[#00e575] text-base font-bold">✦</span>
+              <div className="flex flex-col text-[11px] font-black tracking-wider text-zinc-950 uppercase leading-none">
+                <span>AUTO</span>
+                <span>DETECT</span>
+              </div>
+            </div>
+
+            {/* Engine Switcher */}
+            <div className="inline-flex items-center rounded-xl bg-zinc-100 p-1 border border-zinc-200 text-xs">
+              <span className="text-[10px] uppercase font-bold text-zinc-400 px-1.5 hidden sm:inline">Engine:</span>
+              <button
+                type="button"
+                onClick={() => setEngine('cobalt')}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  engine === 'cobalt'
+                    ? 'bg-[#00e575] text-zinc-950 shadow-sm'
+                    : 'text-zinc-600 hover:text-zinc-950'
+                }`}
+              >
+                ⚡ Cobalt API
+              </button>
+              <button
+                type="button"
+                onClick={() => setEngine('ytdlp')}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  engine === 'ytdlp'
+                    ? 'bg-zinc-950 text-white shadow-sm'
+                    : 'text-zinc-600 hover:text-zinc-950'
+                }`}
+              >
+                🎬 yt-dlp
+              </button>
             </div>
           </div>
 

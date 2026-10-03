@@ -42,10 +42,10 @@ export const SystemInfoModal: React.FC<SystemInfoModalProps> = ({
           <div className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-900/60 p-3">
             <div className="flex items-center gap-2">
               <Server className="h-4 w-4 text-indigo-400" />
-              <span className="text-slate-300 font-medium">yt-dlp Engine</span>
+              <span className="text-slate-300 font-medium">Dual Extraction Engines</span>
             </div>
             <span className="font-mono text-emerald-400 font-semibold">
-              {system?.engineVersion || '2026.08.19 (Active)'}
+              Cobalt API &amp; yt-dlp
             </span>
           </div>
 

@@ -52,6 +52,7 @@ interface DownloadJob {
   duration?: string;
   directPlayUrl?: string;
   directMusicUrl?: string;
+  engine?: "cobalt" | "ytdlp" | "auto";
   createdAt: number;
   expiresAt: number;
 }
@@ -423,10 +424,6 @@ async function startServer() {
         const content = fs.readFileSync(cookiePath, "utf-8");
         if (isValidNetscapeCookies(content)) {
           return cookiePath;
-        } else {
-          console.log(
-            `[Cookies Config] Provided cookie file "${cookiePath}" does not contain valid cookies; ignoring.`
-          );
         }
       } catch {}
     }
@@ -440,7 +437,6 @@ async function startServer() {
     if (cookieContent) {
       if (isValidNetscapeCookies(cookieContent)) {
         try {
-          // Ensure file begins with Netscape header for yt-dlp compatibility
           let formattedContent = cookieContent.trim();
           if (!formattedContent.startsWith("# Netscape HTTP Cookie File")) {
             formattedContent = `# Netscape HTTP Cookie File\n${formattedContent}`;
@@ -448,24 +444,7 @@ async function startServer() {
           fs.writeFileSync(cookieTmpPath, formattedContent, "utf-8");
           return cookieTmpPath;
         } catch {}
-      } else {
-        console.log(
-          "[Cookies Config] Provided cookie content is not in recognized cookie format; ignoring."
-        );
-        try {
-          if (fs.existsSync(cookieTmpPath)) fs.unlinkSync(cookieTmpPath);
-        } catch {}
       }
-    } else {
-      // Clean up stale /tmp/ytdlp_cookies.txt if no cookies are set
-      try {
-        if (fs.existsSync(cookieTmpPath)) {
-          const existing = fs.readFileSync(cookieTmpPath, "utf-8");
-          if (!isValidNetscapeCookies(existing)) {
-            fs.unlinkSync(cookieTmpPath);
-          }
-        }
-      } catch {}
     }
 
     // 3. Local cookies.txt in workspace root
@@ -564,12 +543,14 @@ async function startServer() {
           : outputPath;
 
       const isSd = quality.toUpperCase() === "SD";
+      const isReverse = quality.toUpperCase() === "REVERSE";
       const scaleFilter = isSd ? "scale='min(1280,iw)':-2" : "scale='min(1920,iw)':-2";
+      const videoFilter = isReverse ? `${scaleFilter},reverse` : scaleFilter;
 
       const args = [
         "-y",
         "-i", inputPath,
-        "-vf", scaleFilter,
+        "-vf", videoFilter,
         "-c:v", "libx264",
         "-preset", "ultrafast",
         "-crf", "22",
@@ -577,10 +558,13 @@ async function startServer() {
         "-c:a", "aac",
         "-b:a", "192k",
         "-ar", "44100",
-        "-threads", "0",
-        "-movflags", "+faststart",
-        targetOut,
       ];
+
+      if (isReverse) {
+        args.push("-af", "areverse");
+      }
+
+      args.push("-threads", "0", "-movflags", "+faststart", targetOut);
 
       const ffmpeg = spawn("ffmpeg", args);
       let stderr = "";
@@ -657,8 +641,10 @@ async function startServer() {
     const isYuv420p = !probe.pixFmt || probe.pixFmt === "yuv420p";
     const isContainerMp4 = probe.formatName?.includes("mp4") || probe.formatName?.includes("mov");
 
+    const isReverse = quality.toUpperCase() === "REVERSE";
+
     // Fast-path 1: If video is already H.264, AAC, and standard 8-bit yuv420p in MP4, copy with faststart!
-    if (isAlreadyH264 && isAudioAac && isYuv420p && isContainerMp4) {
+    if (!isReverse && isAlreadyH264 && isAudioAac && isYuv420p && isContainerMp4) {
       return new Promise((resolve) => {
         const targetOut =
           path.resolve(inputPath) === path.resolve(outputPath)
@@ -693,7 +679,7 @@ async function startServer() {
     }
 
     // Fast-path 2: If video is already H.264 & yuv420p, copy video stream and only transcode audio to AAC!
-    if (isAlreadyH264 && isYuv420p) {
+    if (!isReverse && isAlreadyH264 && isYuv420p) {
       return new Promise((resolve) => {
         const targetOut =
           path.resolve(inputPath) === path.resolve(outputPath)
@@ -794,7 +780,6 @@ async function startServer() {
     const validProxy = getValidProxy();
     const validCookiesPath = getValidCookiesArgument();
 
-    // Helper to run yt-dlp with specific arguments
     const runYtDlpAttempt = (formatArg: string, clientArgs?: string): Promise<{ code: number | null; stderr: string; stdout: string }> => {
       return new Promise((resolveAttempt) => {
         const args: string[] = [
@@ -858,13 +843,11 @@ async function startServer() {
       });
     };
 
-    // Helper to find any downloaded file produced by yt-dlp
     const findProducedFile = (): string | null => {
       const dir = path.dirname(outputPathBase);
       const base = path.basename(outputPathBase);
       try {
         const files = fs.readdirSync(dir);
-        // Check for exact merged file first
         const preferredExt = isAudio ? ".mp3" : ".mp4";
         const exactTarget = `${base}.raw${preferredExt}`;
         if (files.includes(exactTarget)) {
@@ -874,7 +857,6 @@ async function startServer() {
           }
         }
 
-        // Filter out intermediate files (.part, .ytdl, .temp, and intermediate unmerged DASH streams like .f137.mp4)
         const validMatches = files.filter((f) => {
           if (!f.startsWith(base)) return false;
           if (f.endsWith(".part") || f.endsWith(".ytdl") || f.endsWith(".temp") || f.endsWith(".aria2")) return false;
@@ -882,7 +864,6 @@ async function startServer() {
           return true;
         });
 
-        // Pick the largest file (which is the fully merged video+audio file)
         validMatches.sort((a, b) => {
           try {
             return fs.statSync(path.join(dir, b)).size - fs.statSync(path.join(dir, a)).size;
@@ -902,7 +883,6 @@ async function startServer() {
       return null;
     };
 
-    // Attempt 1: Prioritize standard H.264 (avc1) video and AAC (mp4a) audio so it remuxes seamlessly into playable MP4
     const primaryFormat = isAudio
       ? "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio/best"
       : quality.toUpperCase() === "SD"
@@ -912,7 +892,6 @@ async function startServer() {
     let attemptResult = await runYtDlpAttempt(primaryFormat);
     let foundFile = findProducedFile();
 
-    // Attempt 2 (Fallback): If first attempt failed to produce a file, retry with relaxed format and alternative player clients
     if (!foundFile) {
       console.log("[Universal Media] Primary format attempt did not produce media, running fallback attempt...");
       const fallbackFormat = isAudio ? "bestaudio/best/18" : "bestvideo+bestaudio/best/18/b";
@@ -934,14 +913,12 @@ async function startServer() {
         console.warn("[Universal Media] Transcoding check failed:", convErr?.message);
       }
 
-      // Safe fallback: if transcode had an issue, serve the raw downloaded file directly!
       if (fs.existsSync(foundFile) && fs.statSync(foundFile).size > 1000) {
         console.log(`[Universal Media] Falling back to raw downloaded file: ${foundFile}`);
         return { success: true, filePath: foundFile };
       }
     }
 
-    // Process error message
     const stderr = attemptResult.stderr;
     const isBotVerification =
       stderr.includes("Sign in to confirm you’re not a bot") ||
@@ -1021,8 +998,6 @@ async function startServer() {
     candidates.push(
       "https://api.cobalt.tools",
       "https://cobalt.tools",
-      "https://co.wuk.sh",
-      "https://api.wuk.sh",
       "https://dl.cobalt.tools"
     );
 
@@ -1032,6 +1007,7 @@ async function startServer() {
       : undefined;
 
     let lastError: string | null = null;
+    let jwtRequired = false;
 
     for (const inst of candidates) {
       try {
@@ -1044,63 +1020,74 @@ async function startServer() {
         if (authHeader) headers["Authorization"] = authHeader;
 
         // Try direct endpoint or /api/json
-        const endpoint = inst.endsWith("/api/json") ? inst : inst.replace(/\/+$/, "");
-
-        const res = await fetch(endpoint, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(cobaltBody),
-          signal: AbortSignal.timeout(12000),
-        });
-
-        const data: any = await res.json().catch(() => null);
-        if (!data) {
-          lastError = `No JSON response from ${inst}`;
-          continue;
+        const targetEndpoints = [inst];
+        if (!inst.endsWith("/api/json")) {
+          targetEndpoints.push(inst.replace(/\/+$/, "") + "/api/json");
         }
 
-        if (data.status === "error" || data.error) {
-          const errCode = data.error?.code || data.error || data.text;
-          console.warn(`[Cobalt API] ${inst} error:`, errCode);
-          lastError = typeof errCode === "string" ? errCode : JSON.stringify(errCode);
-          continue;
-        }
+        for (const ep of targetEndpoints) {
+          try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 8000);
 
-        if (typeof data.url === "string" && data.url.startsWith("http")) {
-          return { streamUrl: data.url, filename: data.filename };
-        }
+            const res = await fetch(ep, {
+              method: "POST",
+              headers,
+              body: JSON.stringify(cobaltBody),
+              signal: controller.signal,
+            }).catch((err) => {
+              lastError = err?.message || "fetch failed";
+              return null;
+            });
+            clearTimeout(timeoutId);
 
-        if (
-          (data.status === "stream" || data.status === "tunnel" || data.status === "redirect" || data.status === "success") &&
-          typeof data.url === "string" &&
-          data.url.startsWith("http")
-        ) {
-          return { streamUrl: data.url, filename: data.filename };
-        }
+            if (!res) continue;
 
-        if (data.status === "picker" && Array.isArray(data.picker) && data.picker.length > 0) {
-          const match =
-            data.picker.find((p: any) => isAudio ? p.type === "audio" : p.type === "video") ||
-            data.picker[0];
-          if (match && typeof match.url === "string" && match.url.startsWith("http")) {
-            return { streamUrl: match.url, filename: data.filename };
+            const data: any = await res.json().catch(() => null);
+            if (!data) continue;
+
+            if (data.error) {
+              const errCode = data.error?.code || (typeof data.error === "string" ? data.error : "");
+              if (errCode.includes("jwt") || errCode.includes("auth")) {
+                jwtRequired = true;
+              }
+              lastError = data.error.context?.service || errCode || "Cobalt API error";
+              continue;
+            }
+
+            // Cobalt v10 / v7 response shapes:
+            // 1. data.status === "tunnel" | "redirect" -> data.url
+            if (data.url && typeof data.url === "string" && data.url.startsWith("http")) {
+              return { streamUrl: data.url, filename: data.filename };
+            }
+
+            // 2. data.status === "picker" -> data.picker[0].url
+            if (Array.isArray(data.picker) && data.picker.length > 0) {
+              const match =
+                data.picker.find((p: any) => isAudio ? p.type === "audio" : p.type === "video") ||
+                data.picker[0];
+              if (match && typeof match.url === "string" && match.url.startsWith("http")) {
+                return { streamUrl: match.url, filename: data.filename };
+              }
+            }
+          } catch (innerErr: any) {
+            lastError = innerErr?.message || "Request failed";
           }
         }
       } catch (err: any) {
         lastError = err?.message || "Connection timeout";
-        console.warn(`[Cobalt API] Failed connecting to ${inst}:`, err?.message);
       }
     }
 
     let friendlyError = "Failed to extract media stream from Cobalt API.";
-    if (lastError?.includes("auth") || lastError?.includes("jwt")) {
+    if (jwtRequired || lastError?.includes("auth") || lastError?.includes("jwt")) {
       friendlyError =
-        "Cobalt API requires authentication or a private instance. Add your instance URL to COBALT_API_URL or your key to COBALT_API_KEY in your environment.";
+        "The public Cobalt API instance requires authentication or a private instance. Add your self-hosted or community instance URL to COBALT_API_URL in your Render Environment.";
     } else if (lastError?.includes("rate_exceeded") || lastError?.includes("rate")) {
       friendlyError =
         "Cobalt API rate limit reached on the public cluster. Please wait a moment or configure your own COBALT_API_URL.";
     } else if (lastError) {
-      friendlyError = `Cobalt API: ${lastError}`;
+      friendlyError = `Cobalt API: ${lastError}. For unlimited cloud downloading, set COBALT_API_URL in your Render Environment.`;
     }
 
     return { error: friendlyError };
@@ -1172,7 +1159,12 @@ async function startServer() {
   }
 
   // Common Handler for Metadata Extraction
-  async function handleMetadataRequest(rawUrl: string, reqPath: string, res: express.Response) {
+  async function handleMetadataRequest(
+    rawUrl: string,
+    reqPath: string,
+    res: express.Response,
+    requestedEngine?: string
+  ) {
     res.set({
       "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
       Pragma: "no-cache",
@@ -1357,6 +1349,7 @@ async function startServer() {
       duration,
       directPlayUrl: tikData?.playUrl || igDirectUrl,
       directMusicUrl: tikData?.musicUrl,
+      engine: (requestedEngine as any) || "cobalt",
       createdAt: now,
       expiresAt: now + 30 * 60 * 1000, // 30 mins
     };
@@ -1405,6 +1398,14 @@ async function startServer() {
             codecInfo: "MP3 Audio (Universal)",
             jobId,
           },
+          {
+            quality: "Reverse (Rewind)",
+            ext: "mp4",
+            url: `/api/download/stream?jobId=${jobId}&quality=REVERSE&url=${encodedUrl}`,
+            size: "Plays Backwards",
+            codecInfo: "H.264 Reverse Motion (Universal MP4)",
+            jobId,
+          },
         ];
 
     const previewUrl = tikData?.playUrl || (platform === "direct" ? trimmedUrl : undefined);
@@ -1436,12 +1437,14 @@ async function startServer() {
   // POST /api/download - Consistent API endpoint
   app.post("/api/download", async (req, res) => {
     const url = req.body?.url;
-    return handleMetadataRequest(url, "/api/download [POST]", res);
+    const engine = req.body?.engine;
+    return handleMetadataRequest(url, "/api/download [POST]", res, engine);
   });
 
   // GET /api/download - Handles metadata queries or direct download streams
   app.get("/api/download", async (req, res) => {
     const rawUrl = (req.query.url as string) || (req.query.link as string);
+    const engine = req.query.engine as any;
     const isDownload =
       req.query.download === "true" ||
       req.query.action === "download" ||
@@ -1452,7 +1455,7 @@ async function startServer() {
       return handleDirectStreamRequest(rawUrl, quality, res);
     }
 
-    return handleMetadataRequest(rawUrl, "/api/download [GET]", res);
+    return handleMetadataRequest(rawUrl, "/api/download [GET]", res, engine);
   });
 
   // GET /api/download/stream - Secure stream endpoint keyed by jobId
@@ -1663,70 +1666,137 @@ async function startServer() {
     }
 
     const tempFileBase = path.join("/tmp", `pastelink_${job.jobId}_${quality}_${Date.now()}`);
-    console.log(`[DEV LOG - Starting Extraction] jobId: ${job.jobId}, platform: ${job.platform}, format: ${quality}`);
+    const chosenEngine = (req.query.engine as string) || job.engine || "cobalt";
+    console.log(`[DEV LOG - Starting Extraction] jobId: ${job.jobId}, platform: ${job.platform}, format: ${quality}, enginePref: ${chosenEngine}`);
 
-    // PRIMARY: Run native yt-dlp with cookies / proxy / player client emulation
-    const ytdlResult = await downloadMediaViaYtDlp(job.normalizedUrl, tempFileBase, isAudio, quality);
+    let extractorError: string | null = null;
+    let isBotDetected = false;
 
-    if (ytdlResult.success && ytdlResult.filePath && fs.existsSync(ytdlResult.filePath)) {
+    if (chosenEngine === "cobalt") {
+      // 1. PRIMARY: Try Cobalt API
       try {
+        console.log("[DEV LOG - Attempting Cobalt API primary]");
+        const cobaltResult = await downloadMediaViaCobalt(job.normalizedUrl, tempFileBase, isAudio, quality);
+        if (cobaltResult.success && cobaltResult.filePath && fs.existsSync(cobaltResult.filePath)) {
+          const finalPath = cobaltResult.filePath;
+          setTimeout(() => {
+            try { if (fs.existsSync(finalPath)) fs.unlinkSync(finalPath); } catch {}
+          }, 15 * 60 * 1000);
+          return serveMediaFile(finalPath, targetFilename, isAudio, isPreview, req, res);
+        }
+        extractorError = cobaltResult.error || null;
+      } catch (cobaltErr: any) {
+        extractorError = cobaltErr?.message || null;
+      }
+
+      // 2. FAILOVER: Try native yt-dlp
+      console.log("[DEV LOG - Cobalt API failed, falling back to yt-dlp]");
+      const ytdlResult = await downloadMediaViaYtDlp(job.normalizedUrl, tempFileBase, isAudio, quality);
+      if (ytdlResult.success && ytdlResult.filePath && fs.existsSync(ytdlResult.filePath)) {
         const finalPath = ytdlResult.filePath;
         setTimeout(() => {
           try { if (fs.existsSync(finalPath)) fs.unlinkSync(finalPath); } catch {}
         }, 15 * 60 * 1000);
-
         return serveMediaFile(finalPath, targetFilename, isAudio, isPreview, req, res);
-      } catch (pipeErr: any) {
-        console.log("[Stream Handler - Pipe Error]", pipeErr?.message);
+      }
+      if (ytdlResult.error) extractorError = ytdlResult.error;
+      if (ytdlResult.isBotVerification) isBotDetected = true;
+    } else {
+      // 1. PRIMARY: Try native yt-dlp
+      const ytdlResult = await downloadMediaViaYtDlp(job.normalizedUrl, tempFileBase, isAudio, quality);
+      if (ytdlResult.success && ytdlResult.filePath && fs.existsSync(ytdlResult.filePath)) {
+        const finalPath = ytdlResult.filePath;
+        setTimeout(() => {
+          try { if (fs.existsSync(finalPath)) fs.unlinkSync(finalPath); } catch {}
+        }, 15 * 60 * 1000);
+        return serveMediaFile(finalPath, targetFilename, isAudio, isPreview, req, res);
+      }
+      extractorError = ytdlResult.error || null;
+      if (ytdlResult.isBotVerification) isBotDetected = true;
+
+      // 2. FAILOVER: Try Cobalt API
+      try {
+        console.log("[DEV LOG - yt-dlp failed, falling back to Cobalt API]");
+        const cobaltResult = await downloadMediaViaCobalt(job.normalizedUrl, tempFileBase, isAudio, quality);
+        if (cobaltResult.success && cobaltResult.filePath && fs.existsSync(cobaltResult.filePath)) {
+          const finalPath = cobaltResult.filePath;
+          setTimeout(() => {
+            try { if (fs.existsSync(finalPath)) fs.unlinkSync(finalPath); } catch {}
+          }, 15 * 60 * 1000);
+          return serveMediaFile(finalPath, targetFilename, isAudio, isPreview, req, res);
+        }
+      } catch (cobaltErr: any) {
+        console.warn("[Stream Handler - Cobalt fallback error]", cobaltErr?.message);
       }
     }
 
-    // Secondary fallback: Cobalt API if user has configured an instance
-    if (getValidEnvString(process.env.COBALT_API_URL)) {
+    // Direct fallback if available (e.g. TikWM CDN stream for TikTok)
+    if (directFallbackUrl) {
       try {
-        const cobaltResult = await extractViaCobalt(job.normalizedUrl, quality, isAudio);
-        if (cobaltResult.streamUrl) {
-          const mediaRes = await fetch(cobaltResult.streamUrl, {
-            headers: {
-              "User-Agent":
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-              Accept: "*/*",
-            },
-            signal: AbortSignal.timeout(35000),
-          });
+        console.log("[DEV LOG - Attempting Direct Stream Fallback]", directFallbackUrl);
+        const fbRes = await fetch(directFallbackUrl, {
+          headers: {
+            "User-Agent":
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+          },
+          signal: AbortSignal.timeout(30000),
+        });
 
-          const ct = (mediaRes.headers.get("content-type") || "").toLowerCase();
-          if (
-            mediaRes.ok &&
-            !ct.includes("text/html") &&
-            !ct.includes("text/plain") &&
-            !ct.includes("xml")
-          ) {
+        if (fbRes.ok) {
+          const tempRawFb = path.join("/tmp", `fb_raw_${job.jobId}_${Date.now()}`);
+          const tempOutFb = path.join("/tmp", `fb_univ_${job.jobId}_${isAudio ? "mp3" : "mp4"}`);
+          const buf = Buffer.from(await fbRes.arrayBuffer());
+          fs.writeFileSync(tempRawFb, buf);
+
+          let finalFile: string | null = null;
+          try {
+            const conv = await Promise.race([
+              ensureUniversalMedia(tempRawFb, tempOutFb, isAudio, quality),
+              new Promise<{ success: boolean; filePath: string }>((_, reject) =>
+                setTimeout(() => reject(new Error("Transcode timeout")), 15000)
+              ),
+            ]);
+            if (conv.success && fs.existsSync(conv.filePath) && fs.statSync(conv.filePath).size > 0) {
+              finalFile = conv.filePath;
+            }
+          } catch (convErr: any) {
+            console.warn("[Stream Handler - Direct Fallback Transcode timeout/error]", convErr?.message);
+          }
+
+          if (!finalFile && fs.existsSync(tempRawFb) && fs.statSync(tempRawFb).size > 0) {
+            finalFile = tempRawFb;
+          }
+
+          if (finalFile && fs.existsSync(finalFile)) {
+            const stats = fs.statSync(finalFile);
             res.setHeader("Content-Type", isAudio ? "audio/mpeg" : "video/mp4");
             res.setHeader(
               "Content-Disposition",
-              `attachment; filename="${cobaltResult.filename || targetFilename}"`
+              `attachment; filename="${targetFilename}"; filename*=UTF-8''${encodeURIComponent(targetFilename)}`
             );
+            res.setHeader("Content-Length", stats.size);
+            res.setHeader("Accept-Ranges", "bytes");
             res.setHeader("Cache-Control", "no-store");
-            const cl = mediaRes.headers.get("content-length");
-            if (cl) res.setHeader("Content-Length", cl);
 
-            if (mediaRes.body) {
-              const stream = Readable.fromWeb(mediaRes.body as any);
-              return stream.pipe(res);
-            } else {
-              const buf = Buffer.from(await mediaRes.arrayBuffer());
-              return res.end(buf);
-            }
+            const fileStream = fs.createReadStream(finalFile);
+            fileStream.pipe(res);
+
+            const cleanup = () => {
+              try { if (fs.existsSync(tempRawFb)) fs.unlinkSync(tempRawFb); } catch {}
+              try { if (fs.existsSync(tempOutFb)) fs.unlinkSync(tempOutFb); } catch {}
+            };
+            fileStream.on("close", cleanup);
+            res.on("close", cleanup);
+            return;
           }
         }
-      } catch (streamErr: any) {
-        console.warn("[cobalt stream error]", streamErr?.message);
+      } catch (fbErr: any) {
+        console.warn("[Stream Handler - Direct Fallback Error]", fbErr?.message);
       }
     }
 
     // Universal Direct Web Fallback: Check if the URL directly serves media bytes
-    if (!ytdlResult.success && !directFallbackUrl) {
+    if (!directFallbackUrl) {
       try {
         console.log("[DEV LOG - Attempting Direct Web Stream Fallback]", job.normalizedUrl);
         const webRes = await fetch(job.normalizedUrl, {
@@ -1757,10 +1827,10 @@ async function startServer() {
 
     // Return the specific, descriptive error returned by the extractor
     const errMsg =
-      ytdlResult.error ||
+      extractorError ||
       `Unable to extract downloadable stream for this ${job.platform} video at this time. The media may be private, restricted, or rate-limited.`;
     const isBot = Boolean(
-      ytdlResult.isBotVerification ||
+      isBotDetected ||
       errMsg.includes("bot verification") ||
       errMsg.includes("not a bot") ||
       errMsg.includes("Sign in to confirm") ||

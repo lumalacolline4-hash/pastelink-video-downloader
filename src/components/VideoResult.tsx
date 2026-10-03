@@ -47,6 +47,12 @@ export const VideoResult: React.FC<VideoResultProps> = ({ metadata }) => {
           url: `/api/download/stream?jobId=${metadata.jobId || ''}&quality=AUDIO&url=${encodeURIComponent(metadata.url || '')}`,
           size: '320k Universal MP3',
         },
+        {
+          quality: 'Reverse (Rewind)',
+          ext: 'mp4',
+          url: `/api/download/stream?jobId=${metadata.jobId || ''}&quality=REVERSE&url=${encodeURIComponent(metadata.url || '')}`,
+          size: 'Plays Backwards',
+        },
       ];
 
   const currentFormat = formats[selectedFormatIndex] || formats[0];
@@ -269,7 +275,7 @@ export const VideoResult: React.FC<VideoResultProps> = ({ metadata }) => {
               Choose Format & Quality:
             </div>
 
-            <div className="grid grid-cols-3 gap-2.5 mb-4">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mb-4">
               {formats.map((fmt, idx) => {
                 const isSelected = selectedFormatIndex === idx;
                 return (
@@ -435,7 +441,7 @@ export const VideoResult: React.FC<VideoResultProps> = ({ metadata }) => {
             <p className="text-xs text-zinc-400 mb-4 leading-relaxed">
               {metadata.platform === 'instagram'
                 ? 'Instagram redirects anonymous requests from cloud hosting providers (Render, Railway, AWS) to its login page. To enable Instagram Reel downloads on Render, add your Instagram cookies to the YTDLP_COOKIES_CONTENT environment variable.'
-                : 'YouTube & social platforms block cloud hosting providers (Render, Railway, AWS) with bot verification. Adding your session cookies or a proxy to Render enables seamless downloading.'}
+                : 'YouTube & social platforms block cloud hosting providers (Render, Railway, AWS) with bot verification. Adding your session cookies enables seamless downloading.'}
             </p>
 
             <div className="space-y-3.5 text-xs">
@@ -461,11 +467,11 @@ export const VideoResult: React.FC<VideoResultProps> = ({ metadata }) => {
               </div>
 
               <div className="bg-zinc-800/70 border border-zinc-700/60 p-3.5 rounded-2xl">
-                <p className="font-bold text-white mb-1">Option 2: Use a Residential Proxy</p>
-                <p className="text-zinc-300 mb-1.5">If you have a residential proxy, add this variable in Render:</p>
+                <p className="font-bold text-white mb-1">Option 2: Use Cobalt API / Proxy</p>
+                <p className="text-zinc-300 mb-1.5">You can also supply a custom Cobalt API instance or residential proxy:</p>
                 <div className="p-2 bg-black/60 rounded font-mono text-[11px] text-[#00e575]">
-                  KEY: PROXY_URL<br/>
-                  VALUE: http://user:pass@proxy-ip:port
+                  KEY: COBALT_API_URL &nbsp; VALUE: https://your-cobalt-instance.com<br/>
+                  KEY: PROXY_URL &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; VALUE: http://user:pass@proxy-ip:port
                 </div>
               </div>
             </div>
